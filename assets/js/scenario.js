@@ -216,7 +216,9 @@ export function selExtra(q, p) {
   const baseline = q.generalFinishPd ?? interiorPd;
   const persons = Math.max(0, gross - baseline);
   const issues = [];
-  if (areas.board == null || areas.tile == null || areas.pvc == null || areas.aluminum == null) issues.push("일부 내장재 면적을 연면적 비율로 추정했습니다.");
+  // 창틀은 PVC·알루미늄 중 하나라도 확인되면 나머지를 0으로 보므로 추정이 아니다
+  const estimated = [areas.board == null && "보드", areas.tile == null && "타일", !hasFrameAreas && "창틀"].filter(Boolean);
+  if (estimated.length) issues.push(`${estimated.join("·")} 면적을 연면적 비율로 추정했습니다.`);
   if (q.generalFinishPd == null) issues.push(`같은 범위의 일반해체 공수가 없어 두 안 공통 내부 철거 공수 ${interiorPd.toFixed(1)}인·일을 잠정 차감했습니다. 일반해체에서 보드·타일·창틀을 철거하지 않으면 0을 입력하세요.`);
   if (baseline > gross) issues.push("적용한 일반해체 공수가 분별 총공수보다 커서 추가 공수를 0으로 계산했습니다.");
   const carpenter = persons * (q.carpenterShare ?? 0) / 100;
@@ -255,6 +257,23 @@ export const excavators = (q, p) => (q.site === "wide" && !smallSite(q) ? Math.m
 export function crews(q, p) {
   const n = excavators(q, p);
   return { excavators: n, standing: p.crew_standing, setup: q.scaffold === false ? 0 : p.crew_setup, interior: p.crew_interior, structure: p.crew_per_excavator * n, finish: p.crew_finish };
+}
+
+// 보드·타일 철거 공수의 비용과 효과가 짝이 맞는지 확인한다. 기본값에서는 떼어 낸 보드·타일을 따로 처리하지 않고
+// (분리율 0, 별도 견적 없음) 콘크리트 성상 배분도 두 공법 동일이라, 철거 비용만 들어가고 효과는 0으로 잡힌다.
+// 반환: 그 비용(인건비 + 늘어난 공기의 간접비·상시 인원)과, 같은 금액을 콘크리트 성상 개선으로 상쇄하려면
+// 건설폐재류에서 순수 폐콘크리트로 옮겨야 하는 비율(%p). 해당 없으면 null.
+export function unbenefitedFinishLabor(q, p) {
+  if (q.labor !== "quantity") return null;
+  const boardSeparated = (p.rec_sel_board ?? 0) > 0 && p.fee_board_separate >= 0;
+  const concreteBenefit = (q.concreteCase ?? DEFAULT_CONCRETE_CASE) !== "same" || (q.cleanSel ?? 0) > 0 && q.cleanPrice != null;
+  if (boardSeparated || concreteBenefit) return null;
+  const without = { ...q, finishAreas: { ...q.finishAreas, board: 0, tile: 0 } };
+  const cost = compare(q, p).delta - compare(without, p).delta;
+  if (!(cost > 1)) return null;
+  const concrete = streamTons(q, p).t.concrete, saving = p.fee_concrete - p.fee_pure_concrete;
+  const sharePoints = concrete > 0 && saving > 0 ? (cost / (concrete * saving)) * 100 : null;
+  return { cost, sharePoints };
 }
 
 export function compare(q, p) {

@@ -125,3 +125,25 @@ test("섬유 유리 배팅과 유리·프레임 합성 창호를 별도로 분�
   const solidGlass = classify(el("plate", [{ name: "복층유리", thickness: 0 }], 0.02, 1), rates);
   near(solidGlass.tons, 0.02 * rates.density.glass);
 });
+
+test("보드·타일 철거 비용만 있고 효과가 0이면 그 금액과 상쇄 조건을 알려 준다", async () => {
+  const { unbenefitedFinishLabor } = await import("../assets/js/scenario.js");
+  const base = { ...quantitiesFromArea(2400, "공동주택", rates), floors: 5, labor: "quantity",
+    finishAreas: { board: 3600, tile: 480, aluminum: 360 } };
+  const r = unbenefitedFinishLabor(base, p);
+  const without = compare({ ...base, finishAreas: { ...base.finishAreas, board: 0, tile: 0 } }, p);
+  near(r.cost, compare(base, p).delta - without.delta, 1e-3);
+  assert.ok(r.cost > 0 && r.sharePoints > 0);
+  // 효과를 넣으면(콘크리트 배분 선택, 보드 분리+견적) 경고하지 않는다. 논문 방식도 해당 없음.
+  assert.equal(unbenefitedFinishLabor({ ...base, concreteCase: "good" }, p), null);
+  assert.equal(unbenefitedFinishLabor(base, { ...p, rec_sel_board: 0.8, fee_board_separate: 50000 }), null);
+  assert.equal(unbenefitedFinishLabor({ ...base, labor: "paper" }, p), null);
+});
+
+test("창틀 면적이 하나라도 확인되면 창틀은 추정으로 표시하지 않는다", () => {
+  const q = { ...quantitiesFromArea(2400, "공동주택", rates), labor: "quantity" };
+  const msg = (areas) => selExtra({ ...q, finishAreas: areas }, p).issues.find((i) => i.includes("연면적 비율로 추정")) ?? "";
+  assert.equal(msg({ board: 10, tile: 10, aluminum: 5 }), "");
+  assert.ok(msg({ board: 10, aluminum: 5 }).startsWith("타일 면적"));
+  assert.ok(msg({}).startsWith("보드·타일·창틀"));
+});

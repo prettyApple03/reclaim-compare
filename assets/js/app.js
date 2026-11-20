@@ -1,5 +1,5 @@
 // 화면과 상태. 계산은 scenario.js / sensitivity.js / classify.js가 한다.
-import { compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES, DEFAULT_CONCRETE_CASE } from "./scenario.js";
+import { compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES, DEFAULT_CONCRETE_CASE, streamTons, unbenefitedFinishLabor } from "./scenario.js";
 import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validationCases, comparableCases, calibrateStructure, benchmark } from "./calibration.js";
 import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js";
 import { classify, quantitiesFromElements, supplement, checkAgainstUnits, elementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js";
@@ -210,14 +210,17 @@ function modelTab(d) {
 
   const { q, classified } = d;
   const total = STREAMS.reduce((s, k) => s + q.t[k], 0);
+  // 비교 계산과 같은 기준: 콘크리트 톤수에서 추정 철근을 빼서 철근·강재 행에 넣는다
+  const { t: shown, rebar } = streamTons(q, state.p);
   const units = rates.wasteUnits[state.usage];
   const check = state.source === "ifc" && !d.openSteelFrame ? checkAgainstUnits(q.raw, state.usage, rates) : [];
   const off = check.filter((c) => c.ratio < 0.5 || c.ratio > 2);
-  const streamRows = STREAMS.filter((s) => q.t[s] > 0).map((s) => {
+  const streamRows = STREAMS.filter((s) => shown[s] > 0).map((s) => {
     const added = q.added[s] || 0, u = units[s];
-    return `<tr><td><i class="dot" style="background:${STREAM_COLOR[s]}"></i> ${STREAM_LABEL[s]}</td>
-      <td class="r">${num(q.t[s] - added, 1)}</td><td class="r">${added ? num(added, 1) : "–"}</td><td class="r">${num(q.t[s], 1)}</td>
-      <td class="r">${num(q.t[s] / q.area_m2, 4)}</td><td class="r">${u != null ? num(u, 4) : s === "masonry" ? "별도 원단위 없음" : "–"}</td>
+    const label = s === "metal" && rebar > 0 ? `${STREAM_LABEL[s]} <span class="muted">(철근 추정 ${num(rebar, 1)}t 포함)</span>` : s === "concrete" && rebar > 0 ? `${STREAM_LABEL[s]} <span class="muted">(철근 제외)</span>` : STREAM_LABEL[s];
+    return `<tr><td><i class="dot" style="background:${STREAM_COLOR[s]}"></i> ${label}</td>
+      <td class="r">${num(shown[s] - added, 1)}</td><td class="r">${added ? num(added, 1) : "–"}</td><td class="r">${num(shown[s], 1)}</td>
+      <td class="r">${num(shown[s] / q.area_m2, 4)}</td><td class="r">${u != null ? num(u, 4) : s === "masonry" ? "별도 원단위 없음" : "–"}</td>
       <td>${SEPARATED.has(s) ? '<span class="badge badge-success">분별 대상</span>' : ""}</td></tr>`;
   }).join("");
 
@@ -342,6 +345,7 @@ function compareTab(d) {
   sim ||= simulate(q, p, vars, { n: 5000, seed: state.seed });
   const better = delta < 0 ? "전면 분별해체" : "일괄 압쇄";
   const issues = [...new Set([...crush.issues, ...selective.issues])];
+  const finishLabor = unbenefitedFinishLabor(q, p);
   const equality = delta === 0;
   const gradeOptions = Object.fromEntries(Object.entries(CONCRETE_CASES).map(([key, input]) => [key, input.label]));
   const gradeRows = Object.entries(CONCRETE_CASES).map(([key, input]) => {
@@ -386,7 +390,7 @@ function compareTab(d) {
   return `<section class="card">
       ${state.source === "ifc" ? `<p>${esc(state.fileName)} · 산정 면적 ${num(q.area_m2,2)}㎡ · ${num(q.floors)}층 · 집계 ${num(d.classified.length)}개 부재</p><p class="caption muted">범위 ${q.scope === "above" ? "식별된 지하·기초 제외" : "입력 모델 전체"} · 원단위 ${esc(state.usage)}${state.supplement ? " 적용" : " 보충 꺼짐"} · 용도·현장 조건 미확인 시 기본 가정을 사용합니다. <button class="btn" data-tab="model">입력 근거 확인</button></p>` : ""}
       <p class="verdict">포함 항목 기준 추정 · ${equality ? "두 공법의 순비용이 같습니다." : `<strong>${better}</strong>의 순비용이 ${mil(Math.abs(delta))}백만원 낮습니다.`}</p>
-      ${work.method === "quantity" && q.generalFinishPd == null ? `<p class="caption muted">일반해체 공수 미입력 · 분별 총공수 ${num(work.gross, 1)}인·일에서 공통 내부 철거 공수 ${num(work.baseline, 1)}인·일을 잠정 차감했습니다. 같은 작업 범위의 공수는 모델에서 입력할 수 있습니다.</p>` : ""}
+      ${finishLabor ? `<div class="disclaimer"><div><strong>보드·타일 철거 비용의 효과가 계산에 없습니다.</strong> 분별안에 보드·타일 철거 비용 ${mil(finishLabor.cost, 1)}백만원(인건비와 늘어난 공기의 간접비·상시 인원)이 들어가지만, 떼어 낸 보드·타일을 따로 처리하는 효과(보드 분리율·별도 처리 견적)와 폐콘크리트 성상 개선은 현재 0입니다.${finishLabor.sharePoints != null ? ` 이 비용을 콘크리트 성상 개선만으로 상쇄하려면 폐콘크리트의 ${num(finishLabor.sharePoints, 0)}%p를 건설폐재류에서 순수 폐콘크리트로 옮겨야 합니다.` : ""} 단가 탭의 보드 분리율·처리 견적, 아래의 폐콘크리트 배분, 현장 조건의 별도 반입 견적으로 효과를 넣을 수 있습니다.</div></div>` : ""}
       ${issues.length ? `<ul class="caption muted">${issues.map((issue) => `<li>${esc(issue)}</li>`).join("")}</ul>` : ""}
       <p class="caption muted">5,000회 비교의 ${num(sim.pSelective * 100, 1)}%에서 분별 순비용이 더 낮았습니다. 이 비율은 입력한 탐색 범위와 삼각분포에 따른 값입니다.</p>
     </section>
@@ -513,7 +517,7 @@ function summary(d) {
   const { crush, selective, delta, deltaDays } = d.cmp;
   sim ||= simulate(d.q, state.p, variables(rates), { n: 5000, seed: state.seed });
   return { source: state.source === "ifc" ? state.fileName : "area", area_m2: state.area, usage: state.usage, site: state.site, labor_method: state.labor,
-    input_quantities: d.q.t, project_inputs: projectInputs(), finish_areas_m2: d.q.finishAreas, applied_rates: state.p,
+    input_quantities: streamTons(d.q, state.p).t, rebar_estimated_t: streamTons(d.q, state.p).rebar, project_inputs: projectInputs(), finish_areas_m2: d.q.finishAreas, applied_rates: state.p,
     crush_total_won: Math.round(crush.total), selective_total_won: Math.round(selective.total), delta_won: Math.round(delta),
     indirect_per_day_won: state.p.indirect_per_day, equipment_crew_period: d.q.equipmentCrewPeriod,
     crush_days: +crush.days.toFixed(1), selective_days: +selective.days.toFixed(1), delta_days: +deltaDays.toFixed(1),
