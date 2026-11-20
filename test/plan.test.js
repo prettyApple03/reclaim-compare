@@ -54,3 +54,14 @@ test("IFC 텍스트: 부재 수가 맞고 한글이 들어가지 않는다", () 
   assert.ok(/^[\x00-\x7F]*$/.test(text));
   assert.ok(text.includes("IFCMATERIAL('Concrete 21MPa')") && text.includes("IFCMATERIAL('Mortar')"));
 });
+
+test("계획서의 현장·장비 조건: 명시한 값이 우선하고, 없으면 해체공법 문구로 탑재를 추정한다", async () => {
+  const { planConditions } = await import("../assets/js/plan.js");
+  const { SITES, EQUIPMENT } = await import("../assets/js/scenario.js");
+  const opts = { sites: SITES, equipments: EQUIPMENT };
+  assert.deepEqual(planConditions({ demolition: { site: "restricted", equipment: "small", crane_days: 3, ground_floors: 1 } }, opts).values,
+    { site: "restricted", equipment: "small", craneDays: 3, groundFloors: 1 });
+  assert.deepEqual(planConditions({ demolition: { method: "압쇄기(소형장비 탑재, 크레인 양중) + 인력" } }, opts).values, { equipment: "mounted", site: "tight" });
+  assert.deepEqual(planConditions(example, opts).values, {}); // 조건이 없으면 기존 기본값(보통·자동)을 쓴다
+  assert.deepEqual(planConditions({ demolition: { site: "wide", method: "장비 탑재" } }, opts).values, { equipment: "mounted", site: "wide" });
+});

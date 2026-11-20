@@ -174,16 +174,23 @@ test("비주거 RC 면적 모드: 1,000㎡의 폐금속 추정량은 73t", () =>
 
 test("대지 협소·진입 제한: 소형 장비로 장비 시간이 늘고 크레인이 붙으며 구조체 공기가 길어진다", () => {
   const base = { ...q, floors: 5 };
+  const hours = (s) => s.rows.filter((r) => r.group === "장비비" && r.unit === "h").reduce((a, r) => a + r.qty, 0);
+  const n = costScenario({ ...base, site: "normal" }, p, "crush");
+  // 소형 지상 장비: 전체 부피를 소형 장비 해체량으로
+  const small = costScenario({ ...base, equipment: "small" }, p, "crush");
+  assert.ok(Math.abs(hours(small) / hours(n) - p.crush_m3_per_day / p.crush_m3_per_day_small) < 1e-9);
   for (const site of ["tight", "restricted"]) {
-    const n = costScenario({ ...base, site: "normal" }, p, "crush"), t = costScenario({ ...base, site }, p, "crush");
-    const excavatorRow = (s) => s.rows.find((r) => r.group === "장비비" && r.unit === "h");
-    const h = (s) => excavatorRow(s).qty;
-    assert.equal(excavatorRow(n).price, p.excavator_per_h);
-    assert.equal(excavatorRow(t).price, p.excavator_per_h);
-    assert.equal(t.excavatorHours, h(t));
-    assert.ok(Math.abs(h(t) / h(n) - p.crush_m3_per_day / p.crush_m3_per_day_small) < 1e-9);
+    const t = costScenario({ ...base, site }, p, "crush");
+    for (const r of t.rows.filter((r) => r.unit === "h")) assert.equal(r.price, p.excavator_per_h);
+    assert.ok(Math.abs(t.excavatorHours - hours(t)) < 1e-9);
+    // 탑재: 위층은 소형 장비, 지상 장비가 닿는 하부 층은 대형 장비
+    const share = p.mounted_ground_floors / base.floors, V = base.concrete_m3;
+    const expected = (V * (1 - share) / p.crush_m3_per_day_small + V * share / p.crush_m3_per_day) * p.hours_per_day;
+    assert.ok(Math.abs(hours(t) - expected) < 1e-6);
     const crane = t.rows.find((r) => r.item.startsWith("이동식 크레인"));
-    assert.ok(crane && Math.abs(crane.qty - t.schedule.structure) < 1e-9);
+    const mountedDays = V * (1 - share) / p.crush_m3_per_day_small, groundDays = V * share / p.crush_m3_per_day;
+    assert.ok(crane && Math.abs(crane.qty - t.schedule.structure * mountedDays / (mountedDays + groundDays)) < 1e-9);
+    assert.ok(crane.qty < t.schedule.structure);
     assert.ok(!n.rows.some((r) => r.item.startsWith("이동식 크레인")));
     assert.ok(t.schedule.structure > n.schedule.structure && t.equipment > n.equipment);
   }

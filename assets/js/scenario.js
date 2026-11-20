@@ -30,6 +30,22 @@ export const LABOR_METHODS = { paper: "논문 표 3·4의 차이 품 (현장 적
 // 압쇄기로 허무는 구조체 부피(㎥): 콘크리트 + 조적
 export const crushVolume = (q) => (q.concrete_m3 || 0) + (q.masonry_m3 || 0);
 
+// 구조체 해체 구간: 장비별 부피·하루 해체량·일수.
+// 탑재 방식은 크레인으로 올린 소형 장비가 위층을 허물고, 지상 장비가 닿는 하부 층은 대형 장비가 허문다
+// (논현동 124-1 계획서 p.9·40·66·69: 탑재 R35Z 지붕~3층, 지상 DX-320 2~1층). 부피는 층수 비율로 나눈다.
+export function crushSegments(q, p) {
+  const volume = crushVolume(q), mode = equipmentMode(q);
+  if (mode === "large") return [{ key: "large", label: "굴착기+압쇄기", volume, production: p.crush_m3_per_day, days: volume / p.crush_m3_per_day }];
+  if (mode === "small") return [{ key: "small", label: "소형 굴착기+압쇄기", volume, production: p.crush_m3_per_day_small, days: volume / p.crush_m3_per_day_small }];
+  const floors = Math.max(1, q.floors || 1);
+  const ground = Math.min(floors, Math.max(0, q.groundFloors ?? p.mounted_ground_floors ?? 0));
+  const lower = volume * ground / floors, upper = volume - lower;
+  return [
+    { key: "mounted", label: "소형 굴착기+압쇄기 (탑재 구간)", volume: upper, production: p.crush_m3_per_day_small, days: upper / p.crush_m3_per_day_small },
+    { key: "ground", label: `굴착기+압쇄기 (지상 장비 구간, 하부 ${ground}개 층)`, volume: lower, production: p.crush_m3_per_day, days: lower / p.crush_m3_per_day },
+  ].filter((segment) => segment.volume > 0 || segment.key === "mounted");
+}
+
 export const paramValues = (rates) => Object.fromEntries(Object.entries(rates.params).map(([k, v]) => [k, v.value]));
 
 const tons = (q) => Object.fromEntries(STREAMS.map((s) => [s, Number(q.t?.[s]) || 0]));
@@ -94,14 +110,21 @@ export function costScenario(q, p, mode) {
     issues.push(...extra.issues);
   }
 
-  const small = smallSite(q);
-  const production = small ? p.crush_m3_per_day_small : p.crush_m3_per_day;
-  const excavatorHours = (crushVolume(q) / production) * p.hours_per_day;
-  let equipment = add("장비비", small ? "소형 굴착기+압쇄기" : "굴착기+압쇄기", excavatorHours, "h", p.excavator_per_h);
+  const segments = crushSegments(q, p);
+  let equipment = 0, excavatorHours = 0;
+  for (const segment of segments) {
+    const hours = segment.days * p.hours_per_day;
+    excavatorHours += hours;
+    equipment += add("장비비", segment.label, hours, "h", p.excavator_per_h);
+  }
   if (equipmentMode(q) === "mounted") {
-    const craneDays = q.craneDays ?? sched.structure;
+    // 크레인은 소형 장비를 올리고 내리는 탑재 구간에만 쓴다. 지상 장비 구간까지 세지 않는다.
+    // 구조체 공기 중 탑재 구간이 차지하는 비율만큼 (구간 일수 비율)
+    const segmentDays = segments.reduce((sum, segment) => sum + segment.days, 0);
+    const mountedShare = segmentDays > 0 ? (segments.find((segment) => segment.key === "mounted")?.days ?? 0) / segmentDays : 1;
+    const craneDays = q.craneDays ?? sched.structure * mountedShare;
     equipment += add("장비비", "이동식 크레인 (장비 탑재·양중)", craneDays, "일", p.crane_per_day);
-    if (q.craneDays == null) issues.push("크레인 사용 일수가 없어 구조체 공정 전체를 적용했습니다.");
+    if (q.craneDays == null) issues.push(`크레인 사용 일수가 없어 탑재 구간 공정 ${craneDays.toFixed(1)}일을 적용했습니다.`);
   }
 
   const rates = separation(p);
@@ -236,12 +259,11 @@ export function schedule(q, p, mode) {
   const k = q.area_m2 / 1000, floors = q.floors || 1;
   const setup = p.sched_setup_base + p.sched_setup_per_1000m2 * k;
   const interior = Math.max(p.sched_interior_min, p.sched_interior_per_1000m2 * k);
-  const production = smallSite(q) ? p.crush_m3_per_day_small : p.crush_m3_per_day;
   const m2PerDay = p.sched_struct_m2_per_day;
   const parallel = excavators(q, p) > 1 ? (q.parallelGain ?? 0) : 0;
   const capacity = 1 + (excavators(q, p) - 1) * parallel;
   const areaDays = p.sched_struct_base + p.sched_struct_per_floor * floors + q.area_m2 / (m2PerDay * capacity);
-  const volumeDays = crushVolume(q) / (production * capacity);
+  const volumeDays = crushSegments(q, p).reduce((sum, segment) => sum + segment.days, 0) / capacity;
   const structure = Math.max(volumeDays, areaDays * (q.structureFactor ?? 1));
   const finish = p.sched_finish_base + p.sched_finish_per_1000m2 * k;
   const selective = mode === "selective" ? selExtra(q, p).persons / p.crew_size : 0;

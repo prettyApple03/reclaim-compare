@@ -86,3 +86,18 @@ export function planToIfc(plan, opts) {
 
   return `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');\nFILE_NAME('plan.ifc','',(''),(''),'reclaim-compare','reclaim-compare','');\nFILE_SCHEMA(('IFC2X3'));\nENDSEC;\nDATA;\n${L.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
 }
+
+// 계획서의 현장·장비 조건 → 모델 입력값. 명시한 값을 우선하고, 없으면 해체공법 문구로 탑재 여부를 추정한다.
+// demolition: { site: "wide"|"normal"|"tight"|"restricted", equipment: "large"|"small"|"mounted",
+//               crane_days: 숫자, ground_floors: 지상 장비가 해체하는 하부 층수 }
+export function planConditions(plan, { sites = {}, equipments = {} } = {}) {
+  const d = plan?.demolition || {}, out = {}, notes = [];
+  const number = (x) => Number.isFinite(x) && x >= 0 ? x : undefined;
+  if (Object.hasOwn(equipments, d.equipment) && d.equipment !== "auto") { out.equipment = d.equipment; notes.push("장비 방식(계획서 값)"); }
+  else if (/탑재|크레인/.test(d.method || "")) { out.equipment = "mounted"; notes.push(`장비 방식: 해체공법 "${d.method}"에서 탑재로 추정`); }
+  if (Object.hasOwn(sites, d.site)) { out.site = d.site; notes.push("대지 조건(계획서 값)"); }
+  else if (out.equipment === "mounted") { out.site = "tight"; notes.push("대지 조건: 탑재 방식이라 협소로 추정"); }
+  if (number(d.crane_days) != null) out.craneDays = number(d.crane_days);
+  if (number(d.ground_floors) != null) out.groundFloors = number(d.ground_floors);
+  return { values: out, notes };
+}

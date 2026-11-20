@@ -34,7 +34,7 @@ try {
 } catch { /* 손상된 브라우저 데이터는 기본 목록으로 복구한다. */ }
 const allCases = () => [...new Map([...caseMap, ...localCases]).values()];
 const caseFields = ["height", "equipment", "scope", "structure", "scaffold", "equipmentCrewPeriod", "craneDays", "parallelGain", "overlap", "mixedMineral", "mixedCombustible",
-  "cleanCrush", "cleanSel", "cleanPrice", "cableCrush", "cableSel", "cablePrice", "fittingCrush", "fittingSel", "fittingPrice", "carpenterShare", "boardM2", "tileM2", "pvcM2", "alM2", "generalFinishPd", "panelTons", "concreteCase"];
+  "cleanCrush", "cleanSel", "cleanPrice", "cableCrush", "cableSel", "cablePrice", "fittingCrush", "fittingSel", "fittingPrice", "carpenterShare", "boardM2", "tileM2", "pvcM2", "alM2", "generalFinishPd", "panelTons", "concreteCase", "groundFloors"];
 const state = {
   tab: "model", source: null, fileName: "", model: null, elements: [], overrides: {},
   area: saved.area || 2400, floors: saved.floors || 5, usage: saved.usage || "공동주택", supplement: false,
@@ -53,6 +53,7 @@ const save = () => {
     if (state.source === "ifc" && state.fileKey) {
       const project = Object.fromEntries([...settings,"overrides","supplement","seed","caseId","useCalibration","calibrationType"].map(k => [k,state[k]]));
       project.supplementSelected = true;
+      if (state.plan) project.planApplied = true;
       localStorage.setItem(state.fileKey, JSON.stringify(project));
     }
     localStorage.setItem("rc.state", JSON.stringify({ ...values, p, rateRevision: 3 })); }
@@ -66,7 +67,7 @@ function projectInputs() {
   return {
     area_m2: state.area, floors: state.floors, site: state.site, labor: state.labor, equipment: state.equipment,
     scope: state.scope, structure: state.structure, height: state.height, scaffold: state.scaffold === "yes", equipmentCrewPeriod: state.equipmentCrewPeriod,
-    craneDays: state.craneDays, parallelGain: (state.parallelGain ?? 0) / 100, overlap: (state.overlap ?? 0) / 100,
+    craneDays: state.craneDays, groundFloors: state.groundFloors, parallelGain: (state.parallelGain ?? 0) / 100, overlap: (state.overlap ?? 0) / 100,
     mixedMineral: (state.mixedMineral ?? 0) / 100, mixedCombustible: (state.mixedCombustible ?? 0) / 100,
     cleanCrush: state.cleanCrush, cleanSel: state.cleanSel, cleanPrice: state.cleanPrice, cableCrush: state.cableCrush, cableSel: state.cableSel, cablePrice: state.cablePrice, fittingCrush: state.fittingCrush, fittingSel: state.fittingSel, fittingPrice: state.fittingPrice, carpenterShare: state.carpenterShare,
     generalFinishPd: state.generalFinishPd, concreteCase: state.concreteCase ?? DEFAULT_CONCRETE_CASE, caseId: state.caseId || state.plan?.source?.validation_id,
@@ -103,17 +104,18 @@ function derive() {
 async function loadPlan(plan, name) {
   try {
     if (plan.schema !== "reclaim-plan/1") throw new Error('schema가 "reclaim-plan/1"이 아닙니다');
-    const { planToIfc } = await import("./plan.js");
+    const { planToIfc, planConditions } = await import("./plan.js");
     const b = plan.building || {};
     if (rates.wasteUnits[b.wasteUnit]) state.usage = b.wasteUnit;
-    await loadIfc(new TextEncoder().encode(planToIfc(plan)).buffer, `${name} → 자동 생성 구조체 모델`, b.demolition_area_m2 || b.area_m2, plan);
+    const conditions = planConditions(plan, { sites: SITES, equipments: EQUIPMENT });
+    await loadIfc(new TextEncoder().encode(planToIfc(plan)).buffer, `${name} → 자동 생성 구조체 모델`, b.demolition_area_m2 || b.area_m2, plan, conditions);
   } catch (e) {
     state.error = `계획서 데이터를 읽지 못했습니다: ${e.message}`; render();
   }
 }
 
 let loadVersion = 0;
-async function loadIfc(buffer, name, area, plan = null) {
+async function loadIfc(buffer, name, area, plan = null, conditions = null) {
   const version = ++loadVersion;
   state.busy = "IFC를 읽는 중입니다…"; state.error = ""; render();
   try {
@@ -133,7 +135,10 @@ async function loadIfc(buffer, name, area, plan = null) {
       floors: b?.floors_above || model.aboveFloors || model.floors });
     Object.assign(state, { height: b?.height_m, usage: b?.wasteUnit in rates.wasteUnits ? b.wasteUnit : model.usage || "공동주택",
       labor: "quantity", equipment: "auto", scope: "unknown", structure: "rc", scaffold: "yes", site: "normal",
-      equipmentCrewPeriod: "structure", supplement: false, seed: 1, useCalibration: false, calibrationType: "plan" }, previous);
+      equipmentCrewPeriod: "structure", supplement: false, seed: 1, useCalibration: false, calibrationType: "plan" }, previous,
+      // 계획서의 현장·장비 조건은, 이 기능 이전에 저장된 값(기본값 "보통")보다 우선한다. 이후 사용자가 고친 값은 유지한다.
+      conditions && !previous?.planApplied ? conditions.values : {});
+    state.planNotes = conditions?.notes ?? [];
     state.tab = "compare"; state.colorMode = "method";
   } catch (e) {
     if (version !== loadVersion) return;
@@ -181,6 +186,7 @@ function modelTab(d) {
           <label class="field">가설 비계 <select class="select" data-set="scaffold">${opts({ yes: "비계공 투입", no: "비계공 0명" }, state.scaffold)}</select></label>
           <label class="field">굴착기 연동 살수·신호 배치 기간 <select class="select" data-set="equipmentCrewPeriod">${opts({ structure: "구조체 작업일 (팀 기본값)", all: "전체 작업일" }, state.equipmentCrewPeriod)}</select></label>
           ${numeric("craneDays", "탑재 해체 크레인 사용 일수")}
+          ${numeric("groundFloors", "탑재 방식 · 지상 장비로 해체하는 하부 층수", { placeholder: `기본 ${state.p.mounted_ground_floors}개 층` })}
           ${numeric("parallelGain", "추가 굴착기 1대당 병렬 효율 (%)", { max: 100, placeholder: "기본 0%" })}
           ${numeric("overlap", "분별 추가 작업의 타 공정 병행률 (%)", { max: 100, placeholder: "기본 0%" })}
           ${numeric("mixedMineral", "혼합·기타 중 확인된 건설폐재류 (%)", { max: 100 })}
@@ -205,6 +211,7 @@ function modelTab(d) {
       </details>
       ${state.formError ? `<p class="badge badge-danger">${esc(state.formError)}</p>` : ""}
       ${state.source === "ifc" ? `<p class="caption muted" style="margin-top:8px">연면적과 층수는 모델에서 읽어 넣어 두었습니다. 연면적은 ${state.model?.gross?.basis === "slab" ? "바닥 슬래브 면적의 합" : "모델에 바닥 슬래브가 없어 외곽 크기 × 층수로 잡은 값(실제보다 클 수 있음)"}, 층수는 층 이름에서 식별한 지하·옥상 레벨을 제외해 추정합니다. 실제 값과 다르면 고치세요.${state.model?.lengthScale && state.model.lengthScale !== 1 ? ` 이 파일의 길이 단위는 ${state.model.lengthScale === 0.001 ? "mm" : `${state.model.lengthScale} m`}이며 m로 바꿔 계산했습니다.` : ""}</p>` : ""}
+      ${state.planNotes?.length ? `<p class="caption muted">계획서에서 가져온 현장 조건: ${esc(state.planNotes.join(" · "))}. 실제와 다르면 현장 조건·자재 면적 입력에서 고치세요.</p>` : ""}
     </section>`;
   if (!d) return input;
 
