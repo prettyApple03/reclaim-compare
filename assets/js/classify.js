@@ -1,25 +1,27 @@
 // IFC 부재(종류·재료 층·부피·면적) → 폐기물 성상별 톤수. DOM·web-ifc를 쓰지 않는다.
-import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons } from "./scenario.js";
+import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js";
 
 export const CATEGORY_LABEL = {
   wall: "벽", slab: "슬래브", beam: "보", column: "기둥", footing: "기초", stair: "계단", roof: "지붕",
-  window: "창호", door: "문", covering: "마감", railing: "난간", plate: "판·부재", pipe: "배관·덕트", other: "기타",
+  window: "창호", door: "문", covering: "마감", railing: "난간", plate: "판·부재", pipe: "배관·덕트", rebar: "철근 (모델)", other: "기타",
 };
 
 // 재료 이름 키워드 → 재료 분류. 위에서부터 먼저 맞는 것을 쓴다.
 // ponytail: 이름 키워드 방식이라 오분류가 있을 수 있다. 화면에서 그룹별로 성상을 고칠 수 있게 했다.
 const MATERIALS = [
   ["panel", "panel", /sandwich[ -]?panel|샌드위치[ -]?(?:패널|판넬)/i],
+  // 철근·섬유로 "보강한" 콘크리트는 철근(강재)·유리섬유(단열재)보다 먼저 콘크리트로 잡는다
+  ["concrete", "concrete", /철근\s*콘크리트|보강\s*콘크리트|reinforced\s*concrete|fib(?:er|re)[- ]?reinforced|GFRC|\bRC\b/i],
   // 유리섬유·광물섬유 단열재는 "glass/유리"보다 먼저 잡는다. 판유리 밀도(2.5t/㎥)로 세면 수십~수백 배 무거워진다.
-  ["insulation", "resin", /insulation|단열|\beps\b|\bxps\b|styro|urethane|우레탄|스티로폼|glass\s*wool|fib(?:er|re)\s*glass|mineral\s*wool|rock\s*wool|그라스울|글라스울|유리\s*섬유|섬유\s*유리|유리면|암면|미네랄\s*울/i],
+  ["insulation", "resin", /insulation|단열|\beps\b|\bxps\b|styro|urethane|우레탄|스티로폼|polystyrene|폴리스티렌|glass\s*wool|fib(?:er|re)\s*glass|mineral\s*wool|rock\s*wool|그라스울|글라스울|유리\s*섬유|섬유\s*유리|유리면|암면|미네랄\s*울/i],
   ["board", "board", /gypsum|석고|plasterboard|drywall|보드|board|텍스/i],
   ["glass", "glass", /glass|유리|glaz/i],
   ["aluminum", "aluminum", /alumin|알루미늄|샤시|sash/i],
-  ["copper", "copper", /copper|구리|동관|brass|황동/i],
-  ["resin", "resin", /pvc|염화비닐|vinyl|plastic|polymer|합성수지|장판|linoleum|리놀륨|epoxy|carpet|카펫|벽지|wallpaper|rubber/i],
+  ["copper", "copper", /copper|구리|동관|동판|brass|황동/i],
+  ["resin", "resin", /pvc|염화비닐|비닐|vinyl|plastic|플라스틱|polymer|폴리|합성수지|아크릴|acrylic|장판|linoleum|리놀륨|epoxy|에폭시|carpet|카펫|벽지|wallpaper|rubber|고무|asphalt|아스팔트|방수|waterproof|membrane|bitumen/i],
   ["wood", "wood", /wood|timber|plywood|목재|합판|마루|lumber|mdf|oak|pine|각재/i],
-  ["metal", "metal", /steel|강재|철골|강관|강봉|형강|강판|\bSTK[MNR]?\s*\d|iron|metal|\bSS\d|\bSM\d|SHN|H-?beam|stud|galvan/i],
-  ["masonry", "masonry", /brick|block|masonry|조적|벽돌|블록|cmu|stone|석재/i],
+  ["metal", "metal", /steel|강철|스틸|스테인리스|stainless|금속|강재|철골|철근|rebar|강관|강봉|형강|강판|철판|\bSTK[MNR]?\s*\d|iron|metal|\bSS\d|\bSM\d|SHN|H-?beam|stud|galvan|zinc|징크|아연/i],
+  ["masonry", "masonry", /brick|block|masonry|조적|벽돌|블록|cmu|stone|석재|화강|granite|대리석|marble|석회석|limestone|사암|sandstone/i],
   ["tile", "tile", /tile|타일|ceramic|도기/i],
   ["mixed", "mixed", /plaster|회반죽|paint|도장/i],
   ["concrete", "concrete", /concrete|콘크리트|\brc\b|cast|mortar|모르타르|screed|cement|시멘트/i],
@@ -27,7 +29,7 @@ const MATERIALS = [
 // 재료 이름으로 알 수 없을 때 부재 종류로 정하는 기본값
 const FALLBACK = {
   wall: "concrete", slab: "concrete", beam: "concrete", column: "concrete", footing: "concrete", stair: "concrete", roof: "concrete",
-  covering: "mixed", railing: "metal", plate: "metal", pipe: "resin", other: "mixed",
+  covering: "mixed", railing: "metal", plate: "metal", pipe: "resin", rebar: "metal", other: "mixed",
 };
 const STRUCTURAL = new Set(["wall", "slab", "beam", "column", "footing", "stair", "roof"]);
 const streamOf = (cls) => MATERIALS.find((m) => m[0] === cls)?.[1] || cls;
@@ -98,7 +100,9 @@ export function classify(el, rates, overrides = {}) {
   }
   // IfcBuildingElementProxy(기타)는 가구·가전·위생기구·조경수 같은 객체가 대부분이고 형상이 닫힌 솔리드가 아니어서
   // 부피가 터무니없이 나온다 (나무 한 그루가 수백 t). 기본은 집계에서 빼고, 화면에서 성상을 고르면 넣는다.
-  if (el.category === "other") { for (const p of parts) p.stream = EXCLUDED; guessed = false; }
+  // 단, 재료 이름으로 성상을 알 수 있는 기타 객체(콘크리트·강재 등으로 모델링한 구조 부재)는 넣는다.
+  // ArchiCAD 등은 구조 부재를 IfcBuildingElementProxy로 내보내는 경우가 있어, 통째로 빼면 물량이 크게 빠진다.
+  if (el.category === "other" && guessed) { for (const p of parts) p.stream = EXCLUDED; guessed = false; }
   const over = overrides[groupKey(el)];
   if (over) { for (const p of parts) p.stream = over; guessed = false; }
   const tons = parts.reduce((s, p) => s + p.tons, 0);
@@ -135,7 +139,9 @@ export function quantitiesFromElements(classified, area_m2) {
     // 조적벽도 압쇄기로 허물므로 장비 시간·구조체 공기에 넣는다 (철근 추정에는 넣지 않는다)
     if (p.stream === "masonry" && STRUCTURAL.has(el.category)) masonry_m3 += p.m3;
   }
-  return { area_m2, concrete_m3, masonry_m3, finishAreas, rebarFromConcrete: true, t, basis: "IFC" };
+  // 모델에 그린 철근(IfcReinforcingBar 등)은 이미 metal에 들어 있다. 엔진은 콘크리트 부피로 추정한 철근량에서 이만큼을 뺀다.
+  const rebarModeledTons = classified.filter((el) => el.category === "rebar" && el.stream !== EXCLUDED).reduce((sum, el) => sum + el.tons, 0);
+  return { area_m2, concrete_m3, masonry_m3, finishAreas, rebarFromConcrete: true, rebarModeledTons, t, basis: "IFC" };
 }
 
 // 모델에 내장재가 빠져 있으면 표준품셈 원단위로 채운다 (모델 값이 원단위의 절반 미만인 성상만)
@@ -151,9 +157,9 @@ export function supplement(q, usage, rates) {
 // 모델의 t/㎡을 원단위와 비교 (검산)
 export function checkAgainstUnits(q, usage, rates) {
   const u = rates.wasteUnits[usage];
-  const rebar = q.rebarFromConcrete ? rebarTons(q, rates.params.rebar_kg_per_m3.value) : 0;
+  const { t } = streamTons(q, { rebar_kg_per_m3: rates.params.rebar_kg_per_m3.value });
   return Object.keys(u).map((s) => {
-    const model = (s === "metal" ? q.t.metal + rebar : s === "concrete" ? q.t.concrete - rebar : q.t[s]) / q.area_m2;
+    const model = t[s] / q.area_m2;
     return { stream: s, model, unit: u[s], ratio: model / u[s] };
   });
 }
@@ -180,14 +186,18 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
     : s === "wood" ? split.wood * gain(p.net_wood)
     : s === "resin" ? split.resin * gain(p.net_resin) : 0;
   // 구조 콘크리트 안의 철근 추정량은 엔진과 같이 폐콘크리트에서 빼서 고철로 센다
+  // 모델 철근이 있으면 엔진과 같이: 콘크리트에서는 철근 전체를 빼고, 고철 수익은 모델에 없는 추정분만 콘크리트 부재에 배분한다
+  const total = q.concrete_m3 > 0 ? streamTons({ ...q, t: { concrete: Infinity } }, p) : null;
+  const estimated = q.concrete_m3 > 0 ? rebarTons(q, p.rebar_kg_per_m3) : 0;
+  const scale = total && estimated > 0 ? total.rebar / estimated : 1, sold = total && total.rebar > 0 ? total.rebarAdded / total.rebar : 1;
   const rebarOf = (el, x) => x.cls === "concrete" && x.stream === "concrete" && STRUCTURAL.has(el.category)
-    ? Math.min(x.tons, rebarTons({ concrete_m3: x.m3, rebarKgPerM3: q.rebarKgPerM3 }, p.rebar_kg_per_m3)) : 0;
+    ? Math.min(x.tons, scale * rebarTons({ concrete_m3: x.m3, rebarKgPerM3: q.rebarKgPerM3 }, p.rebar_kg_per_m3)) : 0;
   return classified.map((el) => ({
     globalId: el.globalId, tag: el.tag, category: el.category, floor: el.floor, stream: el.stream,
     method: el.stream === EXCLUDED ? "제외" : SEPARATED.has(el.stream) ? "분별" : "압쇄",
     tons: el.tons,
     disposal: el.parts.reduce((s, x) => s + (x.tons - rebarOf(el, x)) * fee(x.stream), 0),
-    revenue: el.parts.reduce((s, x) => s + x.tons * price(x.stream) + rebarOf(el, x) * price("metal"), 0),
+    revenue: el.parts.reduce((s, x) => s + x.tons * price(x.stream) + rebarOf(el, x) * sold * price("metal"), 0),
   }));
 }
 

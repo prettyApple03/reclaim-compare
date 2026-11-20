@@ -51,6 +51,15 @@ const CATEGORY = {
   IFCWINDOW: "window", IFCDOOR: "door", IFCCURTAINWALL: "window", IFCCOVERING: "covering", IFCRAILING: "railing",
   IFCPLATE: "plate", IFCMEMBER: "plate", IFCFLOWSEGMENT: "pipe", IFCFLOWFITTING: "pipe", IFCPIPESEGMENT: "pipe",
   IFCPIPEFITTING: "pipe", IFCDUCTSEGMENT: "pipe", IFCDUCTFITTING: "pipe", IFCBUILDINGELEMENTPROXY: "other",
+  // IFC4·ArchiCAD·Tekla가 쓰는 세부 종류. 빠지면 부재가 경고 없이 물량에서 사라진다.
+  IFCWALLELEMENTEDCASE: "wall", IFCSLABSTANDARDCASE: "slab", IFCSLABELEMENTEDCASE: "slab", IFCBEAMSTANDARDCASE: "beam",
+  IFCCOLUMNSTANDARDCASE: "column", IFCMEMBERSTANDARDCASE: "plate", IFCPLATESTANDARDCASE: "plate",
+  IFCDOORSTANDARDCASE: "door", IFCWINDOWSTANDARDCASE: "window", IFCRAMPFLIGHT: "stair", IFCCHIMNEY: "wall",
+  IFCSHADINGDEVICE: "plate", IFCCAISSONFOUNDATION: "footing", IFCDEEPFOUNDATION: "footing",
+  // 모델링한 철근. 있으면 콘크리트 부피로 추정하는 철근량을 그만큼 덜 더한다.
+  IFCREINFORCINGBAR: "rebar", IFCREINFORCINGMESH: "rebar", IFCTENDON: "rebar",
+  // Revit "파트"로 나눈 부재. 종류는 원래 부재(집합 부모)를 따른다.
+  IFCBUILDINGELEMENTPART: "part",
 };
 
 // 재료 연결에서 층 목록을 뽑는다. 두께가 있으면 [{name, thickness}], 없으면 이름만.
@@ -112,6 +121,34 @@ export function massUnitTons(unit) {
   return (prefix ? PREFIX[prefix] : 1) / 1e6;
 }
 
+// IFC 부피 단위 → ㎥ 배율 (SI 접두어는 길이에 붙으므로 세제곱)
+export function volumeUnitM3(unit) {
+  if (!unit) return 1;
+  if (enumOf(unit.UnitType) !== "VOLUMEUNIT") return NaN;
+  if (unit.ConversionFactor) {
+    const c = unit.ConversionFactor;
+    return Number(c.ValueComponent?.value ?? c.ValueComponent) * (c.UnitComponent ? volumeUnitM3(c.UnitComponent) : 1);
+  }
+  if (enumOf(unit.Name) !== "CUBIC_METRE") return NaN;
+  const prefix = enumOf(unit.Prefix);
+  return prefix ? PREFIX[prefix] ** 3 : 1;
+}
+
+// 부재 부피: IFC 수량표(Qto) 부피가 있으면 그것을, 없으면 형상 부피를 쓴다.
+// Revit 등이 계산한 NetVolume이 web-ifc 형상(열린 메시·불리언 실패)보다 믿을 만하다.
+export function pickVolume(meshVolume, qtoVolume) {
+  if (Number.isFinite(qtoVolume) && qtoVolume > 0) return { volume: qtoVolume, source: "qto", diff: meshVolume > 0 ? meshVolume / qtoVolume - 1 : null };
+  return { volume: meshVolume, source: "mesh", diff: null };
+}
+
+// 부피 출처 요약: Qto를 쓴 부재 수와 형상 부피와의 차이 (|차이| 중앙값, 10% 넘게 다른 부재 수)
+export function volumeCheck(elements) {
+  const withQto = elements.filter((el) => el.volumeSource === "qto");
+  const diffs = withQto.map((el) => Math.abs(el.volumeDiff)).filter(Number.isFinite).sort((a, b) => a - b);
+  return { qto: withQto.length, mesh: elements.length - withQto.length,
+    medianDiff: diffs.length ? diffs[Math.floor(diffs.length / 2)] : null, over10: diffs.filter((d) => d > 0.1).length };
+}
+
 export async function parseIfc(buffer) {
   const W = await import(CDN + "web-ifc-api.js");
   const api = new W.IfcAPI();
@@ -125,12 +162,23 @@ export async function parseIfc(buffer) {
     const units = ua ? api.GetLine(model, ua, true).Units || [] : [];
     const scale = lengthScale(units);
     const projectMass = units.find(u => enumOf(u.UnitType) === "MASSUNIT");
-    const weights = new Map();
+    const projectVolume = volumeUnitM3(units.find(u => enumOf(u.UnitType) === "VOLUMEUNIT"));
+    const weights = new Map(), volumes = new Map();
     for (const rid of ids(W.IFCRELDEFINESBYPROPERTIES)) {
       const relation = api.GetLine(model, rid);
       const id = relation.RelatingPropertyDefinition?.value;
       if (!id || api.GetLineType(model, id) !== W.IFCELEMENTQUANTITY) continue;
       for (const ref of api.GetLine(model, id).Quantities || []) {
+        if (api.GetLineType(model, ref.value) === W.IFCQUANTITYVOLUME) {
+          const quantity = api.GetLine(model, ref.value, true);
+          // NetVolume(개구부 제외)을 GrossVolume보다 우선한다
+          const priority = ["grossvolume", "volume", "netvolume"].indexOf(String(quantity.Name?.value || "").toLowerCase().replace(/\s/g, ""));
+          const m3 = Number(quantity.VolumeValue?.value) * (quantity.Unit ? volumeUnitM3(quantity.Unit) : projectVolume);
+          if (priority >= 0 && Number.isFinite(m3) && m3 > 0) for (const object of relation.RelatedObjects || []) {
+            if ((volumes.get(object.value)?.priority ?? -1) < priority) volumes.set(object.value, { priority, m3 });
+          }
+          continue;
+        }
         if (api.GetLineType(model, ref.value) !== W.IFCQUANTITYWEIGHT) continue;
         const quantity = api.GetLine(model, ref.value, true);
         const priority = ["grossweight","추정중량","netweight","순중량"].indexOf(String(quantity.Name?.value || "").toLowerCase().replace(/\s/g,""));
@@ -222,6 +270,16 @@ export async function parseIfc(buffer) {
       if (parent != null) parts.set(parent, [...(parts.get(parent) || []), ...(r.RelatedObjects || []).map((o) => o.value)]);
     }
     dropAggregateParents(acc, parts);
+    // 파트·철근은 집합 부모(또는 주인 부재)의 층·종류를 따른다
+    const parentOf = new Map();
+    for (const [parent, children] of parts) for (const child of children) parentOf.set(child, parent);
+    for (const [id, a] of acc) if (a.category === "part") {
+      const parent = parentOf.get(id);
+      a.category = (parent != null && catOf.get(api.GetLineType(model, parent))) || "other";
+      if (a.category === "part") a.category = "other";
+      if (parent != null && !floorOf.has(id) && floorOf.has(parent)) floorOf.set(id, floorOf.get(parent));
+      if (parent != null && !matOf.has(id) && matOf.has(parent)) matOf.set(id, matOf.get(parent));
+    }
     const elements = [...acc].map(([id, a]) => {
       const line = api.GetLine(model, id);
       let category = a.category;
@@ -235,7 +293,8 @@ export async function parseIfc(buffer) {
         basement: storeys[(floorOf.get(id) ?? 0) - 1]?.basement ?? false,
         roofLevel: storeys[(floorOf.get(id) ?? 0) - 1]?.roof ?? false,
         floor: category === "footing" ? 0 : floorOf.get(id) || 1,
-        volume: a.volume, weightTons: weights.get(id)?.tons,
+        ...(({ volume, source, diff }) => ({ volume, volumeSource: source, meshVolume: a.volume, volumeDiff: diff }))(pickVolume(a.volume, volumes.get(id)?.m3)),
+        weightTons: weights.get(id)?.tons,
         area: openingArea(w, h, a.surface),
         layers: matOf.get(id) || matOf.get(typeOf.get(id)) || [],
       };
@@ -249,7 +308,8 @@ export async function parseIfc(buffer) {
     const description = buildings.flatMap(b => [b.Name, b.LongName, b.ObjectType, b.Description]).map(v => v?.value || "").join(" ");
     const usage = /아파트|공동주택|apartment/i.test(description) ? "공동주택"
       : /단독주택|single.family/i.test(description) ? "단독주택" : null;
-    return { meshes, elements, size, floors, aboveFloors, aboveArea, usage, lengthScale: scale, gross: grossArea(elements, size, floors) };
+    return { meshes, elements, size, floors, aboveFloors, aboveArea, usage, lengthScale: scale, gross: grossArea(elements, size, floors),
+      volumeCheck: volumeCheck(elements) };
   } finally {
     api.CloseModel(model);
   }

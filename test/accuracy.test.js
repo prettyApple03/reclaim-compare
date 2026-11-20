@@ -147,3 +147,47 @@ test("창틀 면적이 하나라도 확인되면 창틀은 추정으로 표시�
   assert.ok(msg({ board: 10, aluminum: 5 }).startsWith("타일 면적"));
   assert.ok(msg({}).startsWith("보드·타일·창틀"));
 });
+
+test("한글 Revit 재료 이름: 강철·철근·비닐·석재·방수를 알아보고, 철근콘크리트는 콘크리트로", () => {
+  const cases = { "금속 - 강철 - ASTM A36": "metal", "강철, 45-345": "metal", "금속 - 스테인리스강": "metal", "철근": "metal", "Rebar": "metal",
+    "철근콘크리트": "concrete", "Reinforced Concrete": "concrete", "유리섬유 보강 콘크리트": "concrete", "콘크리트, 현장 타설 - 24MPa": "concrete",
+    "비닐 바닥재": "resin", "비닐 타일": "resin", "아스팔트": "resin", "방수 시트": "resin", "화강석": "masonry", "대리석": "masonry",
+    "동판": "copper", "징크": "metal", "Polystyrene": "insulation", "Concrete Masonry Units": "masonry" };
+  for (const [name, cls] of Object.entries(cases)) assert.equal(materialClass(name), cls, name);
+  // 한글 강재 이름의 보는 콘크리트(2.4)가 아니라 강재(7.85)로
+  near(classify(el("beam", [{ name: "금속 - 강철", thickness: 0 }], 0.48), rates).tons, 0.48 * 7.85);
+});
+
+test("기타 객체: 재료로 성상을 알면 넣고, 모르면 뺀다", () => {
+  assert.equal(classify(el("other", [{ name: "Concrete", thickness: 0 }], 1), rates).stream, "concrete");
+  assert.equal(classify(el("other", [], 1), rates).stream, "excluded");
+});
+
+test("모델 철근: 추정량에서 모델 철근만큼 덜 더하고, 콘크리트에서는 철근 전체를 뺀다", () => {
+  const q = { concrete_m3: 10, rebarFromConcrete: true, rebarModeledTons: 0.3, t: { concrete: 24, metal: 0.3 } };
+  const { t, rebar, rebarAdded } = streamTons(q, p);
+  near(rebar, 1); near(rebarAdded, 0.7); near(t.concrete, 23); near(t.metal, 1);
+  // 모델 철근이 추정보다 많으면 모델 값을 쓴다
+  const more = streamTons({ ...q, rebarModeledTons: 1.5, t: { concrete: 24, metal: 1.5 } }, p);
+  near(more.rebar, 1.5); near(more.rebarAdded, 0); near(more.t.metal, 1.5); near(more.t.concrete, 22.5);
+});
+
+test("IFC 부피 단위와 Qto 우선", async () => {
+  const { volumeUnitM3, pickVolume, volumeCheck } = await import("../assets/js/ifc.js");
+  near(volumeUnitM3({ UnitType: { value: "VOLUMEUNIT" }, Name: { value: "CUBIC_METRE" } }), 1);
+  near(volumeUnitM3({ UnitType: { value: "VOLUMEUNIT" }, Name: { value: "CUBIC_METRE" }, Prefix: { value: "MILLI" } }), 1e-9);
+  near(volumeUnitM3({ UnitType: { value: "VOLUMEUNIT" }, ConversionFactor: { ValueComponent: { value: 0.0283168 },
+    UnitComponent: { UnitType: { value: "VOLUMEUNIT" }, Name: { value: "CUBIC_METRE" } } } }), 0.0283168);
+  assert.deepEqual(pickVolume(8.192, 7.5).source, "qto");
+  near(pickVolume(8.192, 7.5).volume, 7.5);
+  assert.equal(pickVolume(8.192, undefined).source, "mesh");
+  const check = volumeCheck([{ volumeSource: "qto", volumeDiff: 0.2 }, { volumeSource: "qto", volumeDiff: -0.01 }, { volumeSource: "mesh" }]);
+  assert.deepEqual([check.qto, check.mesh, check.over10], [2, 1, 1]);
+});
+
+test("시험 IFC의 기대값 파일이 생성 스크립트와 맞는다", () => {
+  const expected = JSON.parse(readFileSync(new URL("./fixtures/robust.expected.json", import.meta.url)));
+  const total = (s) => expected.filter((e) => e.stream === s).reduce((a, e) => a + e.tons, 0);
+  near(total("concrete"), 27.6, 1e-9); near(total("metal"), 7.762375, 1e-9); near(total("masonry"), 3.42, 1e-9); near(total("glass"), 0.45, 1e-9);
+  assert.equal(expected.length, 23);
+});

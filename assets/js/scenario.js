@@ -55,11 +55,15 @@ const tons = (q) => Object.fromEntries(STREAMS.map((s) => [s, Number(q.t?.[s]) |
 export const rebarTons = (q, kgPerM3) => ((q.concrete_m3 || 0) * (q.rebarKgPerM3 ?? kgPerM3)) / 1000;
 
 // 물량 q의 성상별 톤수 (철근 분리 반영). 콘크리트에서 뺀 철근은 metal에 더한다.
+// 모델에 철근을 그렸으면(q.rebarModeledTons) 그 무게는 이미 metal에 있으므로, 추정량 중 모자란 만큼만 더한다.
+// 콘크리트 톤수에서는 철근 전체(추정량과 모델량 중 큰 값)를 뺀다 — 콘크리트 형상 부피는 철근을 빼지 않은 값이다.
 export function streamTons(q, p) {
   const t = tons(q);
-  if (!q.rebarFromConcrete) return { t, rebar: 0 };
-  const rebar = Math.min(rebarTons(q, p.rebar_kg_per_m3), t.concrete);
-  return { t: { ...t, concrete: t.concrete - rebar, metal: t.metal + rebar }, rebar };
+  if (!q.rebarFromConcrete) return { t, rebar: 0, rebarAdded: 0 };
+  const modeled = q.rebarModeledTons || 0;
+  const rebar = Math.min(Math.max(rebarTons(q, p.rebar_kg_per_m3), modeled), t.concrete);
+  const rebarAdded = Math.max(0, rebar - modeled);
+  return { t: { ...t, concrete: t.concrete - rebar, metal: t.metal + rebarAdded }, rebar, rebarAdded };
 }
 
 // 폐콘크리트 성상 배분(순수 / 건설폐재류 / 가연물 5% 이하). 분별안이 더 깨끗하다는 배분은 출처가 없는 가정이므로

@@ -212,19 +212,20 @@ function modelTab(d) {
       ${state.formError ? `<p class="badge badge-danger">${esc(state.formError)}</p>` : ""}
       ${state.source === "ifc" ? `<p class="caption muted" style="margin-top:8px">연면적과 층수는 모델에서 읽어 넣어 두었습니다. 연면적은 ${state.model?.gross?.basis === "slab" ? "바닥 슬래브 면적의 합" : "모델에 바닥 슬래브가 없어 외곽 크기 × 층수로 잡은 값(실제보다 클 수 있음)"}, 층수는 층 이름에서 식별한 지하·옥상 레벨을 제외해 추정합니다. 실제 값과 다르면 고치세요.${state.model?.lengthScale && state.model.lengthScale !== 1 ? ` 이 파일의 길이 단위는 ${state.model.lengthScale === 0.001 ? "mm" : `${state.model.lengthScale} m`}이며 m로 바꿔 계산했습니다.` : ""}</p>` : ""}
       ${state.planNotes?.length ? `<p class="caption muted">계획서에서 가져온 현장 조건: ${esc(state.planNotes.join(" · "))}. 실제와 다르면 현장 조건·자재 면적 입력에서 고치세요.</p>` : ""}
+      ${state.source === "ifc" && state.model?.volumeCheck ? (({ qto, mesh, medianDiff, over10 }) => `<p class="caption muted">부재 부피: IFC 수량(Qto) ${num(qto)}개 · 형상 계산 ${num(mesh)}개.${qto && medianDiff != null ? ` Qto와 형상 부피 차이 중앙값 ${num(medianDiff * 100, 1)}%${over10 ? `, 10% 넘게 다른 부재 ${num(over10)}개 (Qto 값을 사용)` : ""}.` : ""}${!qto ? " Revit 내보내기에서 \"기본 수량 내보내기(Export base quantities)\"를 켜면 Revit이 계산한 부피를 씁니다." : ""}</p>`)(state.model.volumeCheck) : ""}
     </section>`;
   if (!d) return input;
 
   const { q, classified } = d;
   const total = STREAMS.reduce((s, k) => s + q.t[k], 0);
   // 비교 계산과 같은 기준: 콘크리트 톤수에서 추정 철근을 빼서 철근·강재 행에 넣는다
-  const { t: shown, rebar } = streamTons(q, state.p);
+  const { t: shown, rebar, rebarAdded } = streamTons(q, state.p);
   const units = rates.wasteUnits[state.usage];
   const check = state.source === "ifc" && !d.openSteelFrame ? checkAgainstUnits(q.raw, state.usage, rates) : [];
   const off = check.filter((c) => c.ratio < 0.5 || c.ratio > 2);
   const streamRows = STREAMS.filter((s) => shown[s] > 0).map((s) => {
     const added = q.added[s] || 0, u = units[s];
-    const label = s === "metal" && rebar > 0 ? `${STREAM_LABEL[s]} <span class="muted">(철근 추정 ${num(rebar, 1)}t 포함)</span>` : s === "concrete" && rebar > 0 ? `${STREAM_LABEL[s]} <span class="muted">(철근 제외)</span>` : STREAM_LABEL[s];
+    const label = s === "metal" && rebarAdded > 0 ? `${STREAM_LABEL[s]} <span class="muted">(철근 추정 ${num(rebarAdded, 1)}t 포함)</span>` : s === "concrete" && rebar > 0 ? `${STREAM_LABEL[s]} <span class="muted">(철근 제외)</span>` : STREAM_LABEL[s];
     return `<tr><td><i class="dot" style="background:${STREAM_COLOR[s]}"></i> ${label}</td>
       <td class="r">${num(shown[s] - added, 1)}</td><td class="r">${added ? num(added, 1) : "–"}</td><td class="r">${num(shown[s], 1)}</td>
       <td class="r">${num(shown[s] / q.area_m2, 4)}</td><td class="r">${u != null ? num(u, 4) : s === "masonry" ? "별도 원단위 없음" : "–"}</td>
@@ -262,7 +263,7 @@ function modelTab(d) {
     <section class="card"><h2>성상별 물량</h2>
       <div class="table-wrap"><table class="tbl"><thead><tr><th>성상</th><th class="r">${state.source === "ifc" ? "모델 (t)" : "원단위 (t)"}</th><th class="r">보충 (t)</th><th class="r">합계 (t)</th><th class="r">t/㎡</th><th class="r">표준품셈 원단위</th><th></th></tr></thead>
       <tbody>${streamRows}</tbody><tfoot><tr><td>합계</td><td></td><td></td><td class="r">${num(total, 1)}</td><td class="r">${num(total / q.area_m2, 4)}</td><td></td><td></td></tr></tfoot></table></div>
-      ${q.rebarFromConcrete ? `<p class="caption muted" style="margin-top:8px">철근은 모델에 없어 콘크리트 1㎥당 ${num(q.rebarKgPerM3 ?? state.p.rebar_kg_per_m3)}kg으로 추정해 고철 수익에 넣습니다 (약 ${num((q.concrete_m3 * (q.rebarKgPerM3 ?? state.p.rebar_kg_per_m3)) / 1000, 1)} t). 콘크리트 톤수는 철근콘크리트 단위질량 2.4t/㎥로 계산했으므로, 같은 무게를 폐콘크리트에서 빼고 처리비를 계산합니다.${q.masonry_m3 > 0 ? ` 조적 ${num(q.masonry_m3, 1)}㎥도 압쇄 장비 시간과 구조체 공기에 넣습니다.` : ""}</p>` : ""}
+      ${q.rebarFromConcrete ? `<p class="caption muted" style="margin-top:8px">${q.rebarModeledTons > 0 ? `모델에 그린 철근 ${num(q.rebarModeledTons, 1)}t을 쓰고, 콘크리트 1㎥당 ${num(q.rebarKgPerM3 ?? state.p.rebar_kg_per_m3)}kg 기준 추정량에 모자란 ${num(rebarAdded, 1)}t만 더합니다.` : `철근은 모델에 없어 콘크리트 1㎥당 ${num(q.rebarKgPerM3 ?? state.p.rebar_kg_per_m3)}kg으로 추정해 고철 수익에 넣습니다 (약 ${num(rebar, 1)} t).`} 콘크리트 톤수는 철근콘크리트 단위질량 2.4t/㎥로 계산했으므로, 같은 무게를 폐콘크리트에서 빼고 처리비를 계산합니다.${q.masonry_m3 > 0 ? ` 조적 ${num(q.masonry_m3, 1)}㎥도 압쇄 장비 시간과 구조체 공기에 넣습니다.` : ""}</p>` : ""}
     </section>
     ${groups}`;
 }
