@@ -201,3 +201,43 @@ test("시험 IFC의 기대값 파일이 생성 스크립트와 맞는다", () =>
   near(total("concrete"), 27.6, 1e-9); near(total("metal"), 7.762375, 1e-9); near(total("masonry"), 3.42, 1e-9); near(total("glass"), 0.45, 1e-9);
   assert.equal(expected.length, 23);
 });
+
+test("수동 재료 정정 시 중량과 압쇄 물량이 같은 재료를 사용한다", () => {
+  const wall = el("wall", [], 10);
+  const key = "wall|(재료 없음)";
+  for (const [material, concrete, masonry, mass] of [
+    ["masonry", 0, 10, 19],
+    ["metal", 0, 0, 78.5],
+    ["mixed", 0, 0, 24],
+  ]) {
+    const q = quantitiesFromElements([classify(wall, rates, { [key]: material })], 100);
+    near(q.concrete_m3, concrete);
+    near(q.masonry_m3, masonry);
+    near(q.t[material], mass);
+  }
+});
+
+test("별도 반출 비용 미입력과 무상 처리를 구분한다", () => {
+  const q = { area_m2: 100, t: { glass: 10, board: 4, panel: 2, metal: 10 } };
+  const inputs = { ...p, rec_sel_glass: 0.5, rec_sel_board: 0.5,
+    fee_glass_separate: -1, fee_board_separate: -1, fee_panel: -1, fee_unsold_metal: -1 };
+  const missing = costScenario(q, inputs, "selective");
+  assert.deepEqual(missing.unpricedDisposal.map(row => row.item).sort(),
+    ["미매각 금속", "분리 폐보드", "분리 폐유리", "폐샌드위치패널"].sort());
+  near(missing.unpricedDisposal.find(row => row.item === "분리 폐유리").tons, 5);
+  const free = costScenario(q, { ...inputs, fee_glass_separate: 0, fee_board_separate: 0,
+    fee_panel: 0, fee_unsold_metal: 0 }, "selective");
+  assert.deepEqual(free.unpricedDisposal, []);
+});
+
+test("공법별 운반 견적은 각 순비용에 한 번만 반영하고 0원과 미입력을 구분한다", () => {
+  const q = { area_m2: 100, t: { concrete: 10 } };
+  const base = compare(q, p);
+  const quoted = compare({ ...q, transportCrush: 1200000, transportSel: 800000 }, p);
+  near(quoted.crush.total - base.crush.total, 1200000);
+  near(quoted.selective.total - base.selective.total, 800000);
+  near(quoted.delta - base.delta, -400000);
+  assert.equal(base.crush.transportQuote, undefined);
+  assert.equal(compare({ ...q, transportCrush: 0 }, p).crush.transportQuote, 0);
+  assert.equal(quoted.crush.rows.find(row => row.item === "가설 설치 비계공").price, 284440);
+});

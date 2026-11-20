@@ -104,7 +104,16 @@ export function classify(el, rates, overrides = {}) {
   // ArchiCAD 등은 구조 부재를 IfcBuildingElementProxy로 내보내는 경우가 있어, 통째로 빼면 물량이 크게 빠진다.
   if (el.category === "other" && guessed) { for (const p of parts) p.stream = EXCLUDED; guessed = false; }
   const over = overrides[groupKey(el)];
-  if (over) { for (const p of parts) p.stream = over; guessed = false; }
+  if (over) {
+    if (over === EXCLUDED || over === "mixed") {
+      for (const part of parts) part.stream = over;
+    } else if (!parts.every(part => part.stream === over)) {
+      // 재료를 정정하면 부재 부피에 새 재료의 밀도를 적용한다.
+      parts.length = 0;
+      push(over, el.volume);
+    }
+    guessed = false;
+  }
   const tons = parts.reduce((s, p) => s + p.tons, 0);
   const stream = [...parts].sort((a, b) => b.tons - a.tons)[0]?.stream || "mixed";
   return { ...el, parts, tons, stream, guessed };
@@ -135,12 +144,12 @@ export function quantitiesFromElements(classified, area_m2) {
   for (const el of classified) for (const p of el.parts) {
     if (!(p.stream in t)) continue; // 제외한 부재
     t[p.stream] += p.tons;
-    if (p.cls === "concrete" && STRUCTURAL.has(el.category)) concrete_m3 += p.m3;
+    if (p.stream === "concrete" && STRUCTURAL.has(el.category)) concrete_m3 += p.m3;
     // 조적벽도 압쇄기로 허물므로 장비 시간·구조체 공기에 넣는다 (철근 추정에는 넣지 않는다)
     if (p.stream === "masonry" && STRUCTURAL.has(el.category)) masonry_m3 += p.m3;
   }
   // 모델에 그린 철근(IfcReinforcingBar 등)은 이미 metal에 들어 있다. 엔진은 콘크리트 부피로 추정한 철근량에서 이만큼을 뺀다.
-  const rebarModeledTons = classified.filter((el) => el.category === "rebar" && el.stream !== EXCLUDED).reduce((sum, el) => sum + el.tons, 0);
+  const rebarModeledTons = classified.filter((el) => el.category === "rebar" && el.stream === "metal").reduce((sum, el) => sum + el.tons, 0);
   return { area_m2, concrete_m3, masonry_m3, finishAreas, rebarFromConcrete: true, rebarModeledTons, t, basis: "IFC" };
 }
 

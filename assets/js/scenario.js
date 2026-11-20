@@ -99,13 +99,14 @@ export function costScenario(q, p, mode) {
 
   const extra = sel ? selExtra(q, p) : null;
   const issues = [];
+  const unpricedDisposal = q.panelWeightMissing ? [{ item: "폐샌드위치패널 중량 미확인", tons: null }] : [];
   if (q.panelWeightMissing) issues.push("폐샌드위치패널이 감지되었습니다. 별도 처리비에 반영할 중량을 입력하세요.");
   if (q.structure === "other") issues.push("기타·복합 구조에 RC 공기와 장비식을 적용한 비교값입니다.");
   // 1. 인건비 — 공종별 일수 × 작업조 × 노임 (두 안 공통). 일수는 schedule()의 공기 규칙을 쓴다.
   const sched = schedule(q, p, mode), days = sched.total, crew = crews(q, p);
   const equipmentCrewDays = q.equipmentCrewPeriod === "all" ? days : sched.structure;
   let labor = add("인건비", "상시 작업유도·감시", crew.standing * days, "인·일", p.wage_laborer)
-    + add("인건비", "가설 설치 비계공", crew.setup * sched.setup, "인·일", p.wage_carpenter)
+    + add("인건비", "가설 설치 비계공", crew.setup * sched.setup, "인·일", p.wage_scaffold ?? p.wage_carpenter)
     + add("인건비", "내부 철거 인부", crew.interior * sched.interior, "인·일", p.wage_laborer)
     + add("인건비", "굴착기 연동 살수·신호", crew.structure * equipmentCrewDays, "인·일", p.wage_laborer)
     + add("인건비", "마무리 인부", crew.finish * sched.finish, "인·일", p.wage_laborer);
@@ -145,7 +146,7 @@ export function costScenario(q, p, mode) {
   if (quoted) disposal += add("처리비","별도 반입 콘크리트 (현장 견적)",quoted,"t",q.cleanPrice);
   if (t.panel > 0) {
     if (p.fee_panel >= 0) disposal += add("처리비", STREAM_LABEL.panel, t.panel, "t", p.fee_panel);
-    else issues.push("폐샌드위치패널 처리비는 별도 견적이 없어 합계에서 빠져 있습니다.");
+    else unpricedDisposal.push({ item: STREAM_LABEL.panel, tons: t.panel });
   }
   if (mix.needsQuote) issues.push("혼합잔재는 별도 견적 조건입니다. 견적 입력 전에는 비교용 잠정단가를 적용합니다.");
 
@@ -164,7 +165,7 @@ export function costScenario(q, p, mode) {
   const unsoldMetal = Math.max(0, metal + t.copper + t.aluminum - sold.metal - sold.copper - sold.aluminum);
   if (unsoldMetal > 0) {
     if (p.fee_unsold_metal >= 0) disposal += add("처리비", "미매각 금속", unsoldMetal, "t", p.fee_unsold_metal);
-    else issues.push("미매각 금속의 처리비는 견적이 없어 합계에서 빠져 있습니다.");
+    else unpricedDisposal.push({ item: "미매각 금속", tons: unsoldMetal });
   }
 
   for (const [key, net] of [["wood", p.net_wood], ["resin", p.net_resin]]) {
@@ -174,13 +175,16 @@ export function costScenario(q, p, mode) {
   for (const [key, quote] of [["glass", p.fee_glass_separate], ["board", p.fee_board_separate]]) {
     if (!split[key]) continue;
     if (quote >= 0) disposal += add("처리비", `분리 ${STREAM_LABEL[key]}`, split[key], "t", quote);
-    else issues.push(`분리 ${STREAM_LABEL[key]} ${split[key].toFixed(2)}t의 처리비는 견적이 없어 합계에서 빠져 있습니다.`);
+    else unpricedDisposal.push({ item: `분리 ${STREAM_LABEL[key]}`, tons: split[key] });
   }
+
+  const transportQuote = sel ? q.transportSel : q.transportCrush;
+  const transport = transportQuote == null ? 0 : add("운반비", "현장 수집·운반", 1, "식", transportQuote);
 
   // 5. 간접비
   const indirect = add("간접비", "현장 간접비", days, "일", p.indirect_per_day);
 
-  return { mode, labor, equipment, disposal, revenue, indirect, days, equipmentCrewDays, excavatorHours, schedule: sched, crews: crew, mixed: mix, split, sold, unsoldMetal, issues, total: labor + equipment + disposal + indirect - revenue, rows: rows.filter((r) => r.qty > 0) };
+  return { mode, labor, equipment, disposal, transport, transportQuote, revenue, indirect, days, unpricedDisposal, equipmentCrewDays, excavatorHours, schedule: sched, crews: crew, mixed: mix, split, sold, unsoldMetal, issues, total: labor + equipment + disposal + transport + indirect - revenue, rows: rows.filter((r) => r.qty > 0) };
 }
 
 // 두 공법의 잔재에 같은 판정 규칙을 적용한다. 혼합·기타의 미확인 성상은 견적 대상으로 둔다.

@@ -17,6 +17,7 @@
   },
   "params": {
     "wage_carpenter": {"group":"노임","label":"목공 노임","value":282990,"unit":"원/인·일","source":"wage2026","date":"2026-09-01","ref":"2026년 하반기 시중노임 공표값. 현장 계약단가를 알면 교체."},
+    "wage_scaffold": {"group":"노임","label":"비계공 노임","value":284440,"unit":"원/인·일","source":"wage2026","date":"2026-09-01","ref":"2026년 하반기 시중노임 직종 1006, 8시간 기준."},
     "wage_laborer": {"group":"노임","label":"보통인부 노임","value":172698,"unit":"원/인·일","source":"wage2026","date":"2026-09-01","ref":"2026년 하반기 시중노임 공표값. 현장 계약단가를 알면 교체."},
     "sel_extra_carpenter": {"group": "분별 추가 품", "label": "분별로 늘어나는 목공 품 (표 3·4 차이)", "value": 0.09, "unit": "인·일/㎡", "source": "paper", "date": "2023", "min": 0.045, "max": 0.15, "assumed": true, "ref": "논문 사례 차이 0.09. 현장 적용 범위 0.045~0.15는 탐색값."},
     "sel_extra_laborer": {"group": "분별 추가 품", "label": "분별로 늘어나는 보통인부 품 (표 3·4 차이)", "value": 0.025, "unit": "인·일/㎡", "source": "paper", "date": "2023", "min": 0.025, "max": 0.325, "assumed": true, "ref": "논문 표 차이 0.025. 모르타르 0.12 및 타일 차이 0.18을 복원한 0.325는 가상 대안. 연속 분포에 포함하지 않음.", "sample": false},
