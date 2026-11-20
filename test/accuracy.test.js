@@ -93,7 +93,7 @@ test("집합 부재: 하위 부재에 형상이 있으면 부모(커튼월·계�
 test("작업량 방식: 일반해체 공수 미입력이면 두 안 공통 내부 철거 공수를 빼서 중복을 막는다", () => {
   const q = { ...quantitiesFromArea(2400, "공동주택", rates), floors: 5, labor: "quantity" };
   const interior = generalInteriorPd(q, p);
-  near(interior, p.crew_interior * Math.max(p.sched_interior_min, p.sched_interior_per_1000m2 * 2.4));
+  near(interior, p.crew_interior * p.sched_interior_per_1000m2 * 2.4);
   const auto = selExtra(q, p), none = selExtra({ ...q, generalFinishPd: 0 }, p), given = selExtra({ ...q, generalFinishPd: 5 }, p);
   near(auto.persons, auto.gross - interior);
   near(none.persons, none.gross);
@@ -103,7 +103,17 @@ test("작업량 방식: 일반해체 공수 미입력이면 두 안 공통 내�
   const item = (s) => s.rows.find((r) => r.item === "내부 철거 인부").qty;
   const cmp = compare(q, p);
   near(item(cmp.crush), item(cmp.selective));
-  near(item(cmp.crush), interior);
+  near(item(cmp.crush), p.crew_interior * Math.max(p.sched_interior_min, p.sched_interior_per_1000m2 * 2.4));
+});
+
+test("작은 건물: 내부 철거 최소 1일치는 차감하지 않아 분별 추가 공수가 0으로 사라지지 않는다", () => {
+  const small = { ...quantitiesFromArea(64.17, "단독주택", rates), floors: 1, labor: "quantity" };
+  const extra = selExtra(small, p);
+  near(extra.interiorPd, p.crew_interior * p.sched_interior_per_1000m2 * 0.06417);
+  assert.ok(extra.persons > 0 && Math.abs(extra.persons - (extra.gross - extra.interiorPd)) < 1e-9);
+  assert.ok(compare(small, p).deltaDays > 0);
+  // 공정표의 내부 철거 일수(최소 1일)는 그대로
+  near(compare(small, p).crush.schedule.interior, p.sched_interior_min);
 });
 
 test("콘크리트 성상 배분의 기본값은 두 공법 동일: 근거 없이 분별안에 유리하게 기울지 않는다", () => {

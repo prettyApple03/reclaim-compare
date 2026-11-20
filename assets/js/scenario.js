@@ -212,10 +212,11 @@ export function mixedWaste(t, split, p, q = {}) {
   return { tons, share, main, unknown, fee, rule };
 }
 
-// 두 안에 공통으로 들어간 일반해체 내부 철거 공수 (인·일) = 내부 철거 작업조 × 내부 철거 일수
+// 일반해체 내부 철거 공수 중 분별 작업과 겹치는 부분 (인·일) = 내부 철거 작업조 × 면적 비례 일수.
+// 공정표의 최소 일수(sched_interior_min)는 작은 건물에도 하루를 잡는 일정 하한이지 실제 철거 작업량이 아니므로 빼지 않는다.
+// (최소 1일치를 빼면 64㎡ 건물에서 6인·일이 빠져 분별 추가 공수가 항상 0이 된다.)
 export function generalInteriorPd(q, p) {
-  const days = Math.max(p.sched_interior_min, p.sched_interior_per_1000m2 * q.area_m2 / 1000);
-  return p.crew_interior * days;
+  return p.crew_interior * p.sched_interior_per_1000m2 * q.area_m2 / 1000;
 }
 
 export function selExtra(q, p) {
@@ -246,7 +247,7 @@ export function selExtra(q, p) {
   // 창틀은 PVC·알루미늄 중 하나라도 확인되면 나머지를 0으로 보므로 추정이 아니다
   const estimated = [areas.board == null && "보드", areas.tile == null && "타일", !hasFrameAreas && "창틀"].filter(Boolean);
   if (estimated.length) issues.push(`${estimated.join("·")} 면적을 연면적 비율로 추정했습니다.`);
-  if (q.generalFinishPd == null) issues.push(`같은 범위의 일반해체 공수가 없어 두 안 공통 내부 철거 공수 ${interiorPd.toFixed(1)}인·일을 잠정 차감했습니다. 일반해체에서 보드·타일·창틀을 철거하지 않으면 0을 입력하세요.`);
+  if (q.generalFinishPd == null) issues.push(`같은 범위의 일반해체 공수가 없어 두 안 공통 내부 철거 공수 중 면적 비례분 ${interiorPd.toFixed(1)}인·일을 잠정 차감했습니다. 일반해체에서 보드·타일·창틀을 철거하지 않으면 0을 입력하세요.`);
   if (baseline > gross) issues.push("적용한 일반해체 공수가 분별 총공수보다 커서 추가 공수를 0으로 계산했습니다.");
   const carpenter = persons * (q.carpenterShare ?? 0) / 100;
   if (q.carpenterShare == null) issues.push("목공 투입 비율 미확인. 작업량 방식은 보통인부 단가로 잠정 산정합니다.");
