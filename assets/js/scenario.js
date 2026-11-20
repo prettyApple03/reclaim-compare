@@ -27,18 +27,36 @@ export const separation = (p) => ({
 // 분별 추가 품 계산 방식 (6.3의 3)
 export const LABOR_METHODS = { paper: "논문 표 3·4의 차이 품 (현장 적용 가정)", quantity: "자재별 작업량과 일반해체 공수 차감" };
 
+// 압쇄기로 허무는 구조체 부피(㎥): 콘크리트 + 조적
+export const crushVolume = (q) => (q.concrete_m3 || 0) + (q.masonry_m3 || 0);
+
 export const paramValues = (rates) => Object.fromEntries(Object.entries(rates.params).map(([k, v]) => [k, v.value]));
 
 const tons = (q) => Object.fromEntries(STREAMS.map((s) => [s, Number(q.t?.[s]) || 0]));
 
+// IFC 콘크리트 톤수는 철근콘크리트 단위질량(2.4t/㎥, KDS 기준 24kN/㎥)으로 계산했으므로 철근 무게가 이미 들어 있다.
+// 철근을 콘크리트 부피에서 따로 추정해 고철로 셀 때는 같은 무게를 폐콘크리트에서 빼야 이중 계상이 없다.
+export const rebarTons = (q, kgPerM3) => ((q.concrete_m3 || 0) * (q.rebarKgPerM3 ?? kgPerM3)) / 1000;
+
+// 물량 q의 성상별 톤수 (철근 분리 반영). 콘크리트에서 뺀 철근은 metal에 더한다.
+export function streamTons(q, p) {
+  const t = tons(q);
+  if (!q.rebarFromConcrete) return { t, rebar: 0 };
+  const rebar = Math.min(rebarTons(q, p.rebar_kg_per_m3), t.concrete);
+  return { t: { ...t, concrete: t.concrete - rebar, metal: t.metal + rebar }, rebar };
+}
+
+// 폐콘크리트 성상 배분(순수 / 건설폐재류 / 가연물 5% 이하). 분별안이 더 깨끗하다는 배분은 출처가 없는 가정이므로
+// 기본값은 두 공법에 같은 배분을 쓰고, 분별안 가정은 사용자가 고르거나 처리장 견적(cleanSel·cleanPrice)으로 넣는다.
+export const DEFAULT_CONCRETE_CASE = "same";
 export const CONCRETE_CASES = {
-  same: { label: "양 공법 동일", shares: [0.66, 0.26, 0.08] },
+  same: { label: "양 공법 동일 (기본)", shares: [0.66, 0.26, 0.08] },
   standard: { label: "분별 기본 가정", shares: [0.71, 0.26, 0.03] },
   good: { label: "분별 선별 양호 가정", shares: [0.80, 0.18, 0.02] },
 };
 
-export function concreteGrades(p, selective, concreteCase = "good") {
-  const scenario = selective ? CONCRETE_CASES[concreteCase] ?? CONCRETE_CASES.good : CONCRETE_CASES.same;
+export function concreteGrades(p, selective, concreteCase = DEFAULT_CONCRETE_CASE) {
+  const scenario = selective ? CONCRETE_CASES[concreteCase] ?? CONCRETE_CASES[DEFAULT_CONCRETE_CASE] : CONCRETE_CASES.same;
   const shares = scenario.shares;
   return [
     { name: "순수 폐콘크리트", share: shares[0], fee: p.fee_pure_concrete },
@@ -49,9 +67,9 @@ export function concreteGrades(p, selective, concreteCase = "good") {
 
 export function costScenario(q, p, mode) {
   const sel = mode === "selective";
-  const t = tons(q);
-  // IFC 모델에는 철근이 없으므로 콘크리트 부피에서 추정한다
-  const metal = t.metal + (q.rebarFromConcrete ? (q.concrete_m3 * (q.rebarKgPerM3 ?? p.rebar_kg_per_m3)) / 1000 : 0);
+  // IFC 모델에는 철근이 없으므로 콘크리트 부피에서 추정하고, 그만큼 폐콘크리트 톤수에서 뺀다
+  const { t } = streamTons(q, p);
+  const metal = t.metal;
   const rows = [];
   const add = (group, item, qty, unit, price, sign = 1) => {
     const amount = sign * qty * price;
@@ -78,7 +96,7 @@ export function costScenario(q, p, mode) {
 
   const small = smallSite(q);
   const production = small ? p.crush_m3_per_day_small : p.crush_m3_per_day;
-  const excavatorHours = ((q.concrete_m3 || 0) / production) * p.hours_per_day;
+  const excavatorHours = (crushVolume(q) / production) * p.hours_per_day;
   let equipment = add("장비비", small ? "소형 굴착기+압쇄기" : "굴착기+압쇄기", excavatorHours, "h", p.excavator_per_h);
   if (equipmentMode(q) === "mounted") {
     const craneDays = q.craneDays ?? sched.structure;
@@ -167,6 +185,12 @@ export function mixedWaste(t, split, p, q = {}) {
   return { tons, share, main, unknown, fee, rule };
 }
 
+// 두 안에 공통으로 들어간 일반해체 내부 철거 공수 (인·일) = 내부 철거 작업조 × 내부 철거 일수
+export function generalInteriorPd(q, p) {
+  const days = Math.max(p.sched_interior_min, p.sched_interior_per_1000m2 * q.area_m2 / 1000);
+  return p.crew_interior * days;
+}
+
 export function selExtra(q, p) {
   const A = q.area_m2;
   if (q.labor !== "quantity") {
@@ -185,15 +209,19 @@ export function selExtra(q, p) {
     + (areas.tile ?? A * p.int_tile_ratio) / p.int_tile_m2_per_day
     + (hasFrameAreas ? (areas.pvc ?? 0) * p.window_pvc_pd_per_m2 + (areas.aluminum ?? 0) * p.window_al_pd_per_m2
       : frameArea * p.window_frame_pd_per_m2);
-  const baseline = q.generalFinishPd;
-  const persons = Math.max(0, gross - (baseline ?? 0));
+  // 자재별 공수는 보드·타일·창틀을 "떼어 내는 총공수"다. 일반해체(두 안 공통)의 내부 철거 인부도 같은 범위를
+  // 철거하므로, 그대로 더하면 분별안에서 같은 작업을 두 번 센다. 입력값이 없으면 두 안에 이미 들어간
+  // 내부 철거 공수를 같은 범위의 일반해체 공수로 보고 뺀다 (0을 입력하면 차감하지 않는다).
+  const interiorPd = generalInteriorPd(q, p);
+  const baseline = q.generalFinishPd ?? interiorPd;
+  const persons = Math.max(0, gross - baseline);
   const issues = [];
   if (areas.board == null || areas.tile == null || areas.pvc == null || areas.aluminum == null) issues.push("일부 내장재 면적을 연면적 비율로 추정했습니다.");
-  if (baseline == null) issues.push("같은 범위의 일반해체 공수가 없어 자재별 분별 총공수를 잠정 적용했습니다.");
-  if (baseline > gross) issues.push("입력한 일반해체 공수가 분별 총공수보다 큽니다. 추가 공수는 0으로 계산했습니다.");
+  if (q.generalFinishPd == null) issues.push(`같은 범위의 일반해체 공수가 없어 두 안 공통 내부 철거 공수 ${interiorPd.toFixed(1)}인·일을 잠정 차감했습니다. 일반해체에서 보드·타일·창틀을 철거하지 않으면 0을 입력하세요.`);
+  if (baseline > gross) issues.push("적용한 일반해체 공수가 분별 총공수보다 커서 추가 공수를 0으로 계산했습니다.");
   const carpenter = persons * (q.carpenterShare ?? 0) / 100;
   if (q.carpenterShare == null) issues.push("목공 투입 비율 미확인. 작업량 방식은 보통인부 단가로 잠정 산정합니다.");
-  return { method: "quantity", rows: [
+  return { method: "quantity", interiorPd, rows: [
     { item: "분별 추가: 내장재·창틀 보통인부", qty: persons-carpenter, wage: "laborer" },
     { item: "분별 추가: 내장재·창틀 목공", qty: carpenter, wage: "carpenter" }],
     gross, baseline, persons, issues };
@@ -211,7 +239,7 @@ export function schedule(q, p, mode) {
   const parallel = excavators(q, p) > 1 ? (q.parallelGain ?? 0) : 0;
   const capacity = 1 + (excavators(q, p) - 1) * parallel;
   const areaDays = p.sched_struct_base + p.sched_struct_per_floor * floors + q.area_m2 / (m2PerDay * capacity);
-  const volumeDays = (q.concrete_m3 || 0) / (production * capacity);
+  const volumeDays = crushVolume(q) / (production * capacity);
   const structure = Math.max(volumeDays, areaDays * (q.structureFactor ?? 1));
   const finish = p.sched_finish_base + p.sched_finish_per_1000m2 * k;
   const selective = mode === "selective" ? selExtra(q, p).persons / p.crew_size : 0;

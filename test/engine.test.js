@@ -217,14 +217,15 @@ test("대형 병렬 장비의 공기와 소형 지상 장비의 크레인 독립
 });
 
 test("콘크리트 견적은 해당 물량만 대체하고 별도 매각분은 공법별로 한 번 차감한다", () => {
-  const base = compare(q, p);
-  const result = compare({ ...q, cleanSel: 25, cleanPrice: 30000,
+  const qg = { ...q, concreteCase: "good" };
+  const base = compare(qg, p);
+  const result = compare({ ...qg, cleanSel: 25, cleanPrice: 30000,
     cableCrush: 1, cableSel: 2, cablePrice: 100000 }, p);
   assert.equal(result.selective.revenue - base.selective.revenue, 200000);
   assert.equal(result.crush.revenue - base.crush.revenue, 100000);
   assert.ok(Math.abs(base.selective.disposal - result.selective.disposal
     - q.t.concrete * 0.25 * (35290.8 - 30000)) < 0.01);
-  assert.equal(compare({ ...q, cleanSel: 25 }, p).delta, base.delta);
+  assert.equal(compare({ ...qg, cleanSel: 25 }, p).delta, base.delta);
 });
 
 test("목공 비율을 바꾸면 총공수는 같고 직종별 차액만 인건비에 반영된다", () => {

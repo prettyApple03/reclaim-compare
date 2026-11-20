@@ -1,5 +1,5 @@
 // 화면과 상태. 계산은 scenario.js / sensitivity.js / classify.js가 한다.
-import { compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES } from "./scenario.js";
+import { compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES, DEFAULT_CONCRETE_CASE } from "./scenario.js";
 import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validationCases, comparableCases, calibrateStructure, benchmark } from "./calibration.js";
 import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js";
 import { classify, quantitiesFromElements, supplement, checkAgainstUnits, elementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js";
@@ -69,7 +69,7 @@ function projectInputs() {
     craneDays: state.craneDays, parallelGain: (state.parallelGain ?? 0) / 100, overlap: (state.overlap ?? 0) / 100,
     mixedMineral: (state.mixedMineral ?? 0) / 100, mixedCombustible: (state.mixedCombustible ?? 0) / 100,
     cleanCrush: state.cleanCrush, cleanSel: state.cleanSel, cleanPrice: state.cleanPrice, cableCrush: state.cableCrush, cableSel: state.cableSel, cablePrice: state.cablePrice, fittingCrush: state.fittingCrush, fittingSel: state.fittingSel, fittingPrice: state.fittingPrice, carpenterShare: state.carpenterShare,
-    generalFinishPd: state.generalFinishPd, concreteCase: state.concreteCase ?? "good", caseId: state.caseId || state.plan?.source?.validation_id,
+    generalFinishPd: state.generalFinishPd, concreteCase: state.concreteCase ?? DEFAULT_CONCRETE_CASE, caseId: state.caseId || state.plan?.source?.validation_id,
   };
 }
 
@@ -198,7 +198,7 @@ function modelTab(d) {
             numeric("pvcM2", "PVC 창틀 면적 (㎡)", { placeholder: "IFC 또는 면적비" }),
             numeric("alM2", "알루미늄 창틀 면적 (㎡)", { placeholder: "IFC 또는 면적비" }),
             numeric("carpenterShare","추가 공수 중 목공 (%)",{max:100}),
-            numeric("generalFinishPd", "동일 범위의 일반해체 공수 (인·일)"),
+            numeric("generalFinishPd", "동일 범위의 일반해체 공수 (인·일)", { placeholder: "기본: 내부 철거 공수 차감" }),
           ].join("") : ""}
         </div>
         <p class="caption muted" style="margin-top:8px">비율 합계에서 남는 혼합·기타 물량은 성상 미확인으로 계산합니다. 높이는 비교 기록에 쓰입니다. 장비 방식은 현장 조건에 맞춰 지정하세요. 작업량 방식의 공란 면적은 식별된 IFC 물량 또는 면적비를 사용합니다.</p>
@@ -252,7 +252,7 @@ function modelTab(d) {
     <section class="card"><h2>성상별 물량</h2>
       <div class="table-wrap"><table class="tbl"><thead><tr><th>성상</th><th class="r">${state.source === "ifc" ? "모델 (t)" : "원단위 (t)"}</th><th class="r">보충 (t)</th><th class="r">합계 (t)</th><th class="r">t/㎡</th><th class="r">표준품셈 원단위</th><th></th></tr></thead>
       <tbody>${streamRows}</tbody><tfoot><tr><td>합계</td><td></td><td></td><td class="r">${num(total, 1)}</td><td class="r">${num(total / q.area_m2, 4)}</td><td></td><td></td></tr></tfoot></table></div>
-      ${q.rebarFromConcrete ? `<p class="caption muted" style="margin-top:8px">철근은 모델에 없어 콘크리트 1㎥당 ${num(state.p.rebar_kg_per_m3)}kg으로 추정해 고철 수익에 넣습니다 (약 ${num((q.concrete_m3 * state.p.rebar_kg_per_m3) / 1000, 1)} t).</p>` : ""}
+      ${q.rebarFromConcrete ? `<p class="caption muted" style="margin-top:8px">철근은 모델에 없어 콘크리트 1㎥당 ${num(q.rebarKgPerM3 ?? state.p.rebar_kg_per_m3)}kg으로 추정해 고철 수익에 넣습니다 (약 ${num((q.concrete_m3 * (q.rebarKgPerM3 ?? state.p.rebar_kg_per_m3)) / 1000, 1)} t). 콘크리트 톤수는 철근콘크리트 단위질량 2.4t/㎥로 계산했으므로, 같은 무게를 폐콘크리트에서 빼고 처리비를 계산합니다.${q.masonry_m3 > 0 ? ` 조적 ${num(q.masonry_m3, 1)}㎥도 압쇄 장비 시간과 구조체 공기에 넣습니다.` : ""}</p>` : ""}
     </section>
     ${groups}`;
 }
@@ -386,7 +386,7 @@ function compareTab(d) {
   return `<section class="card">
       ${state.source === "ifc" ? `<p>${esc(state.fileName)} · 산정 면적 ${num(q.area_m2,2)}㎡ · ${num(q.floors)}층 · 집계 ${num(d.classified.length)}개 부재</p><p class="caption muted">범위 ${q.scope === "above" ? "식별된 지하·기초 제외" : "입력 모델 전체"} · 원단위 ${esc(state.usage)}${state.supplement ? " 적용" : " 보충 꺼짐"} · 용도·현장 조건 미확인 시 기본 가정을 사용합니다. <button class="btn" data-tab="model">입력 근거 확인</button></p>` : ""}
       <p class="verdict">포함 항목 기준 추정 · ${equality ? "두 공법의 순비용이 같습니다." : `<strong>${better}</strong>의 순비용이 ${mil(Math.abs(delta))}백만원 낮습니다.`}</p>
-      ${work.method === "quantity" && work.baseline == null ? `<p class="caption muted">일반해체 공수 미입력 · 분별 총공수 ${num(work.gross, 1)}인·일을 추가 공수로 잠정 적용했습니다. 같은 작업 범위의 일반해체 공수는 모델에서 입력할 수 있습니다.</p>` : ""}
+      ${work.method === "quantity" && q.generalFinishPd == null ? `<p class="caption muted">일반해체 공수 미입력 · 분별 총공수 ${num(work.gross, 1)}인·일에서 공통 내부 철거 공수 ${num(work.baseline, 1)}인·일을 잠정 차감했습니다. 같은 작업 범위의 공수는 모델에서 입력할 수 있습니다.</p>` : ""}
       ${issues.length ? `<ul class="caption muted">${issues.map((issue) => `<li>${esc(issue)}</li>`).join("")}</ul>` : ""}
       <p class="caption muted">5,000회 비교의 ${num(sim.pSelective * 100, 1)}%에서 분별 순비용이 더 낮았습니다. 이 비율은 입력한 탐색 범위와 삼각분포에 따른 값입니다.</p>
     </section>
@@ -420,7 +420,7 @@ function compareTab(d) {
            ["structure", "구조체 해체", `면적식 ${num(crush.schedule.areaDays, 1)}일${q.structureFactor ? ` × 보정계수 ${num(q.structureFactor, 3)}` : ""}, 장비 생산성 기준 ${num(crush.schedule.volumeDays, 1)}일 중 큰 값`],
            ["finish", "마무리 (정리·비계 해체)", `${num(p.sched_finish_base, 1)} + 연면적 ÷ 1,000 × ${num(p.sched_finish_per_1000m2, 1)}`]]
           .map(([k, label, f]) => `<tr><td>${label}</td><td class="muted">${f}</td><td class="r">${k === "structure" ? "–" : num(crush.crews[k])}</td><td class="r">${num(crush.schedule[k], 1)}</td><td class="r">${k === "structure" ? "–" : num(crush.crews[k] * crush.schedule[k])}</td><td class="r">${num(selective.schedule[k], 1)}</td><td class="r">${k === "structure" ? "–" : num(selective.crews[k] * selective.schedule[k])}</td></tr>`).join("")}
-        <tr><td>분별 추가 작업</td><td class="muted">${work.method === "quantity" ? `자재별 분별 총공수 ${num(work.gross, 2)} − 일반해체 공수 ${work.baseline ?? "미입력"} 인·일` : `연면적 × (목공 ${num(p.sel_extra_carpenter, 3)} + 보통인부 ${num(p.sel_extra_laborer, 3)} 인·일/㎡)`} ÷ 작업조 ${num(p.crew_size)}명</td><td class="r">${num(p.crew_size)}</td><td class="r">–</td><td class="r">–</td><td class="r">${num(selective.schedule.selective, 1)}</td><td class="r">${num(work.persons, 1)}</td></tr>
+        <tr><td>분별 추가 작업</td><td class="muted">${work.method === "quantity" ? `자재별 분별 총공수 ${num(work.gross, 2)} − 일반해체 공수 ${num(work.baseline, 2)}${q.generalFinishPd == null ? " (내부 철거 공수, 잠정)" : ""} 인·일` : `연면적 × (목공 ${num(p.sel_extra_carpenter, 3)} + 보통인부 ${num(p.sel_extra_laborer, 3)} 인·일/㎡)`} ÷ 작업조 ${num(p.crew_size)}명</td><td class="r">${num(p.crew_size)}</td><td class="r">–</td><td class="r">–</td><td class="r">${num(selective.schedule.selective, 1)}</td><td class="r">${num(work.persons, 1)}</td></tr>
         <tr><td>상시 작업유도·감시</td><td class="muted">전체 작업일</td><td class="r">${num(crush.crews.standing)}</td><td class="r">${num(crush.days, 1)}</td><td class="r">${num(crush.crews.standing * crush.days)}</td><td class="r">${num(selective.days, 1)}</td><td class="r">${num(selective.crews.standing * selective.days)}</td></tr>
         <tr><td>굴착기 연동 살수·신호</td><td class="muted">${crewOnWholeJob ? "전체 작업일" : "구조체 작업일"} · 굴착기 ${num(crush.crews.excavators)}대 × ${num(p.crew_per_excavator)}명/대</td><td class="r">${num(crush.crews.structure)}</td><td class="r">${num(crush.equipmentCrewDays, 1)}</td><td class="r">${num(crush.crews.structure * crush.equipmentCrewDays)}</td><td class="r">${num(selective.equipmentCrewDays, 1)}</td><td class="r">${num(selective.crews.structure * selective.equipmentCrewDays)}</td></tr>
       </tbody><tfoot><tr><td>공기 (작업일) · 총공수 (인·일)</td><td></td><td></td><td class="r">${num(crush.days, 1)}</td><td class="r">${num(persons(crush))}</td><td class="r">${num(selective.days, 1)}</td><td class="r">${num(persons(selective))}</td></tr></tfoot></table></div>

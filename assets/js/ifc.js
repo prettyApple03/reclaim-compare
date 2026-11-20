@@ -89,6 +89,18 @@ export function grossArea(elements, size, floors) {
   return area > 0 ? { area, basis: "slab" } : { area: size[0] * size[2] * floors, basis: "bbox" };
 }
 
+// 모든 하위 가지에 집계 가능한 부재가 있는 경우에만 집합 부모를 제외한다.
+export function dropAggregateParents(acc, parts) {
+  const hasGeometry = (id, seen = new Set()) => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    const children = parts.get(id) || [];
+    return children.length > 0 && children.every((child) => acc.has(child) || hasGeometry(child, new Set(seen)));
+  };
+  for (const id of [...acc.keys()].filter(id => hasGeometry(id))) acc.delete(id);
+  return acc;
+}
+
 export function massUnitTons(unit) {
   if (!unit || enumOf(unit.UnitType) !== "MASSUNIT") return NaN;
   if (unit.ConversionFactor) {
@@ -201,6 +213,15 @@ export async function parseIfc(buffer) {
       a.surface += meshSurface(mesh.positions, mesh.index);
       acc.set(mesh.expressID, a);
     }
+    // 커튼월·계단·지붕처럼 하위 부재(패널·멀리언·계단참·지붕 슬래브)로 나뉜 집합 부재는
+    // 하위 형상을 모두 집계할 수 있는 집합 부재만 부모 형상을 제외한다.
+    const parts = new Map();
+    for (const rid of ids(W.IFCRELAGGREGATES)) {
+      const r = api.GetLine(model, rid);
+      const parent = r.RelatingObject?.value;
+      if (parent != null) parts.set(parent, [...(parts.get(parent) || []), ...(r.RelatedObjects || []).map((o) => o.value)]);
+    }
+    dropAggregateParents(acc, parts);
     const elements = [...acc].map(([id, a]) => {
       const line = api.GetLine(model, id);
       let category = a.category;
