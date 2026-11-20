@@ -3,9 +3,9 @@
 //          site(대지 조건: SITES의 키), labor(분별 추가 품 계산: "paper" | "quantity") }
 // 단가 p = { 키: 숫자 } (rates.json의 params에서 value만 뽑은 것)
 
-export const STREAMS = ["concrete", "metal", "wood", "resin", "glass", "tile", "board", "panel", "mixed", "copper", "aluminum"];
+export const STREAMS = ["concrete", "masonry", "metal", "wood", "resin", "glass", "tile", "board", "panel", "mixed", "copper", "aluminum"];
 export const STREAM_LABEL = {
-  concrete: "폐콘크리트·조적", metal: "철근·강재", wood: "폐목재", resin: "폐합성수지", glass: "폐유리", tile: "폐타일·도자기",
+  concrete: "폐콘크리트", masonry: "폐벽돌·조적", metal: "철근·강재", wood: "폐목재", resin: "폐합성수지", glass: "폐유리", tile: "폐타일·도자기",
   board: "폐보드", panel: "폐샌드위치패널", mixed: "혼합·기타", copper: "구리", aluminum: "알루미늄",
   excluded: "제외 (집계 안 함)",
 };
@@ -30,6 +30,22 @@ export const LABOR_METHODS = { paper: "논문 표 3·4의 차이 품 (현장 적
 export const paramValues = (rates) => Object.fromEntries(Object.entries(rates.params).map(([k, v]) => [k, v.value]));
 
 const tons = (q) => Object.fromEntries(STREAMS.map((s) => [s, Number(q.t?.[s]) || 0]));
+
+export const CONCRETE_CASES = {
+  same: { label: "양 공법 동일", shares: [0.66, 0.26, 0.08] },
+  standard: { label: "분별 기본 가정", shares: [0.71, 0.26, 0.03] },
+  good: { label: "분별 선별 양호 가정", shares: [0.80, 0.18, 0.02] },
+};
+
+export function concreteGrades(p, selective, concreteCase = "good") {
+  const scenario = selective ? CONCRETE_CASES[concreteCase] ?? CONCRETE_CASES.good : CONCRETE_CASES.same;
+  const shares = scenario.shares;
+  return [
+    { name: "순수 폐콘크리트", share: shares[0], fee: p.fee_pure_concrete },
+    { name: "건설폐재류 (가연물 제거)", share: shares[1], fee: p.fee_concrete },
+    { name: "건설폐재류 (가연물 5% 이하)", share: shares[2], fee: p.fee_mixed_mineral },
+  ];
+}
 
 export function costScenario(q, p, mode) {
   const sel = mode === "selective";
@@ -73,8 +89,15 @@ export function costScenario(q, p, mode) {
   const rates = separation(p);
   const split = Object.fromEntries(Object.entries(rates).map(([key, rate]) => [key, sel ? t[key] * rate : 0]));
   const mix = mixedWaste(t, split, p, q);
-  let disposal = add("처리비", STREAM_LABEL.concrete, t.concrete, "t", p.fee_concrete)
-    + add("처리비", "혼합건설폐기물", mix.tons, "t", mix.fee);
+  const specified = t.concrete * (sel ? q.cleanSel ?? 0 : q.cleanCrush ?? 0) / 100;
+  const quoted = q.cleanPrice == null ? 0 : specified;
+  if (specified && !quoted) issues.push("콘크리트 별도 반입 견적이 없어 공법별 성상 비율을 적용했습니다.");
+  let disposal = add("처리비", "혼합건설폐기물", mix.tons, "t", mix.fee);
+  for (const grade of concreteGrades(p, sel, q.concreteCase)) {
+    disposal += add("처리비", grade.name, (t.concrete - quoted) * grade.share, "t", grade.fee);
+  }
+  if (t.masonry > 0) disposal += add("처리비", "폐벽돌·조적 (건설폐재류)", t.masonry, "t", p.fee_concrete);
+  if (quoted) disposal += add("처리비","별도 반입 콘크리트 (현장 견적)",quoted,"t",q.cleanPrice);
   if (t.panel > 0) {
     if (p.fee_panel >= 0) disposal += add("처리비", STREAM_LABEL.panel, t.panel, "t", p.fee_panel);
     else issues.push("폐샌드위치패널 처리비는 별도 견적이 없어 합계에서 빠져 있습니다.");
@@ -87,6 +110,12 @@ export function costScenario(q, p, mode) {
   let revenue = -add("매각수익", "고철", sold.metal, "t", p.price_scrap, -1)
     - add("매각수익", "구리", sold.copper, "t", p.price_copper, -1)
     - add("매각수익", "알루미늄", sold.aluminum, "t", p.price_aluminum, -1);
+  for (const [key,label] of [["cable","별도 계근 폐전선"],["fitting","별도 계근 배관·설비"]]) {
+    const weight = q[key + (sel ? "Sel" : "Crush")];
+    if (!weight) continue;
+    if (q[key+"Price"] == null) issues.push(label + " 인수 견적이 없어 수익에서 제외했습니다.");
+    else revenue -= add("매각수익",label,weight,"t",q[key+"Price"],-1);
+  }
   const unsoldMetal = Math.max(0, metal + t.copper + t.aluminum - sold.metal - sold.copper - sold.aluminum);
   if (unsoldMetal > 0) {
     if (p.fee_unsold_metal >= 0) disposal += add("처리비", "미매각 금속", unsoldMetal, "t", p.fee_unsold_metal);
@@ -162,7 +191,11 @@ export function selExtra(q, p) {
   if (areas.board == null || areas.tile == null || areas.pvc == null || areas.aluminum == null) issues.push("일부 내장재 면적을 연면적 비율로 추정했습니다.");
   if (baseline == null) issues.push("같은 범위의 일반해체 공수가 없어 자재별 분별 총공수를 잠정 적용했습니다.");
   if (baseline > gross) issues.push("입력한 일반해체 공수가 분별 총공수보다 큽니다. 추가 공수는 0으로 계산했습니다.");
-  return { method: "quantity", rows: [{ item: "분별 추가: 내장재·창틀 (일반해체 공수 차감)", qty: persons, wage: "laborer" }],
+  const carpenter = persons * (q.carpenterShare ?? 0) / 100;
+  if (q.carpenterShare == null) issues.push("목공 투입 비율 미확인. 작업량 방식은 보통인부 단가로 잠정 산정합니다.");
+  return { method: "quantity", rows: [
+    { item: "분별 추가: 내장재·창틀 보통인부", qty: persons-carpenter, wage: "laborer" },
+    { item: "분별 추가: 내장재·창틀 목공", qty: carpenter, wage: "carpenter" }],
     gross, baseline, persons, issues };
 }
 

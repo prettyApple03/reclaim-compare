@@ -28,7 +28,8 @@ test("분별 추가 품 = 논문 표 3·4의 분별 − 일반 차이", () => {
   assert.deepEqual([diff(0), diff(1)], [0.09, 0.025]);
   assert.deepEqual([p.sel_extra_carpenter, p.sel_extra_laborer], [0.09, 0.025]);
   // 논문 사례 규모(2,400㎡)에서 논문의 시공비 증가 67,522천원과 같다
-  const rows = costScenario({ ...q, floors: 5 }, p, "selective").rows.filter((r) => r.item.startsWith("분별 추가"));
+  const paperWages = { ...p, wage_carpenter: paper.wage.carpenter, wage_laborer: paper.wage.laborer };
+  const rows = costScenario({ ...q, floors: 5 }, paperWages, "selective").rows.filter((r) => r.item.startsWith("분별 추가"));
   assert.equal(Math.round(rows.reduce((a, r) => a + r.qty, 0)), 276);
   assert.ok(Math.abs(rows.reduce((a, r) => a + r.amount, 0) / 1000 - 67522) < 1);
 });
@@ -213,4 +214,34 @@ test("대형 병렬 장비의 공기와 소형 지상 장비의 크레인 독립
   assert.ok(!ground.rows.some((row) => row.item.includes("크레인")));
   const mounted = compare({ ...wide, equipment: "mounted", craneDays: 1 }, p).crush;
   assert.equal(mounted.rows.find((row) => row.item.includes("크레인")).qty, 1);
+});
+
+test("콘크리트 견적은 해당 물량만 대체하고 별도 매각분은 공법별로 한 번 차감한다", () => {
+  const base = compare(q, p);
+  const result = compare({ ...q, cleanSel: 25, cleanPrice: 30000,
+    cableCrush: 1, cableSel: 2, cablePrice: 100000 }, p);
+  assert.equal(result.selective.revenue - base.selective.revenue, 200000);
+  assert.equal(result.crush.revenue - base.crush.revenue, 100000);
+  assert.ok(Math.abs(base.selective.disposal - result.selective.disposal
+    - q.t.concrete * 0.25 * (35290.8 - 30000)) < 0.01);
+  assert.equal(compare({ ...q, cleanSel: 25 }, p).delta, base.delta);
+});
+
+test("목공 비율을 바꾸면 총공수는 같고 직종별 차액만 인건비에 반영된다", () => {
+  const input = { ...q, labor: "quantity", generalFinishPd: 1 };
+  const initial = costScenario(input, p, "selective");
+  const split = costScenario({ ...input, carpenterShare: 50 }, p, "selective");
+  const persons = selExtra(input, p).persons;
+  assert.equal(initial.days, split.days);
+  assert.ok(Math.abs(split.labor - initial.labor - persons / 2 * (p.wage_carpenter - p.wage_laborer)) < 0.01);
+});
+
+test("조적에는 별도 처리 단가를 적용하고 콘크리트에만 성상 가정을 적용한다", () => {
+  const input = { ...q, t: { concrete: 100, masonry: 20 } };
+  const same = compare({ ...input, concreteCase: "same" }, p);
+  const good = compare({ ...input, concreteCase: "good" }, p);
+  assert.equal(same.crush.disposal, same.selective.disposal);
+  assert.equal(good.crush.disposal, same.crush.disposal);
+  assert.equal(good.selective.rows.find(row => row.item.startsWith("폐벽돌")).amount, 20 * p.fee_concrete);
+  assert.equal(good.selective.rows.find(row => row.item === "순수 폐콘크리트").qty, 80);
 });

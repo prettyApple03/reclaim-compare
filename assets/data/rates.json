@@ -1,6 +1,7 @@
 {
   "note": "assumed=true 인 값은 출처가 없는 잠정값이다. 화면과 보고서에 '가정'으로 표시한다.",
   "sources": {
+    "wage2026": "대한건설협회, 2026년 하반기 적용 건설업 임금실태조사 보고서, 시중노임단가 10쪽 (8시간)",
     "paper": "박지선·장경필·송태협 (2023), 한국건설순환자원학회 논문집 11(3) 251-259",
     "meeting": "팀 조사 (회의록 2026-11-12)",
     "pumsem": "국토교통부 2023 건설공사 표준품셈 (논문 표 6 인용)",
@@ -14,8 +15,8 @@
     "indirect_case": "범일동 PDF p.22·27 · 기장읍 PDF p.12·17 · 군부대 내역서 비율(팀 메모)"
   },
   "params": {
-    "wage_carpenter": {"group": "노임", "label": "목공 노임", "value": 267639, "unit": "원/인·일", "source": "paper", "date": "2023", "min": 240000, "max": 300000},
-    "wage_laborer": {"group": "노임", "label": "보통인부 노임", "value": 161858, "unit": "원/인·일", "source": "paper", "date": "2023", "min": 145000, "max": 180000},
+    "wage_carpenter": {"group":"노임","label":"목공 노임","value":282990,"unit":"원/인·일","source":"wage2026","date":"2026-09-01","ref":"2026년 하반기 시중노임 공표값. 현장 계약단가를 알면 교체."},
+    "wage_laborer": {"group":"노임","label":"보통인부 노임","value":172698,"unit":"원/인·일","source":"wage2026","date":"2026-09-01","ref":"2026년 하반기 시중노임 공표값. 현장 계약단가를 알면 교체."},
     "sel_extra_carpenter": {"group": "분별 추가 품", "label": "분별로 늘어나는 목공 품 (표 3·4 차이)", "value": 0.09, "unit": "인·일/㎡", "source": "paper", "date": "2023", "min": 0.045, "max": 0.15, "assumed": true, "ref": "논문 사례 차이 0.09. 현장 적용 범위 0.045~0.15는 탐색값."},
     "sel_extra_laborer": {"group": "분별 추가 품", "label": "분별로 늘어나는 보통인부 품 (표 3·4 차이)", "value": 0.025, "unit": "인·일/㎡", "source": "paper", "date": "2023", "min": 0.025, "max": 0.325, "assumed": true, "ref": "논문 표 차이 0.025. 모르타르 0.12 및 타일 차이 0.18을 복원한 0.325는 가상 대안. 연속 분포에 포함하지 않음.", "sample": false},
     "crew_standing": {"group": "작업조", "label": "상시 작업유도·감시 인원", "value": 1, "unit": "명", "source": "crew_plans", "date": "2026-11", "min": 1, "max": 2, "assumed": true, "ref": "천마산 p.38 유도 1명, 정선 p.65 차량 통제 1명. 같은 역할로 묶어 공기 전체에 넣고 관리자는 직접노무에서 제외하는 것은 팀 판단."},
@@ -38,6 +39,7 @@
     "window_frame_pd_per_m2": {"group": "분별 추가 품 (작업량 방식)", "label": "재질 미확인 창틀 분별 총공수", "value": 0.01125, "unit": "인·일/㎡", "source": "heokim2024", "date": "2024", "min": 0.0018, "max": 0.0699, "ref": "두 재질의 작업 관측 중앙값 평균. 혼합 비율 및 RC 현장 적용은 미검증.", "assumed": true},
     "window_pvc_pd_per_m2": {"group": "분별 추가 품 (작업량 방식)", "label": "PVC 창틀 분별 총공수", "value": 0.0103, "unit": "인·일/㎡", "source": "heokim2024", "date": "2024", "min": 0.0073, "max": 0.024, "ref": "표 6의 작업 관측 중앙값. 표 7 평균 0.0122; 최소~최대는 개별 작업 관측 범위.", "assumed": true},
     "window_al_pd_per_m2": {"group": "분별 추가 품 (작업량 방식)", "label": "알루미늄 창틀 분별 총공수", "value": 0.0122, "unit": "인·일/㎡", "source": "heokim2024", "date": "2024", "min": 0.0018, "max": 0.0699, "ref": "표 6의 작업 관측 중앙값. 표 7 평균 0.0229; 최소~최대는 개별 작업 관측 범위.", "assumed": true},
+    "fee_pure_concrete": {"group":"처리비","label":"순수 폐콘크리트","value":31142,"unit":"원/t","source":"cmpi2026","date":"2026-01-01","ref":"이물질 없는 반입 조건. 건축물 적용 사례는 청송아파트 철거 설계내역."},
     "fee_concrete": {"group": "처리비", "label": "건설폐재류 (양 공법 공통)", "value": 49571, "unit": "원/t", "source": "cmpi2026", "date": "2026-01-01", "ref": "거래가격 2026년 단가표. 31,142원/t은 도로 구조물의 이물질 없는 순수 폐콘크리트 기준."},
     "fee_board_mixed": {"group": "처리비", "label": "기타+가연물 (보드·판넬 중심, 5% 이하)", "value": 192887, "unit": "원/t", "source": "cmpi2026", "date": "2026-01-01", "ref": "폐샌드위치패널은 별도 산정."},
     "mixed_combustible_limit": {"group": "처리비", "label": "공표 혼합 단가의 가연물 중량 한도", "value": 0.05, "unit": "비율", "source": "cmpi2026", "date": "2026-01-01", "locked": true},

@@ -57,10 +57,10 @@ const CATEGORY = {
 function materialLayers(o, W, out = [], depth = 0) {
   if (!o || typeof o !== "object" || depth > 7) return out;
   if (o.type === W.IFCMATERIALLAYER) {
-    out.push({ name: o.Material?.Name?.value || "", thickness: Number(o.LayerThickness?.value) || 0 });
+    out.push({ name: o.Material?.Name?.value || "", category: o.Material?.Category?.value || "", thickness: Number(o.LayerThickness?.value) || 0 });
     return out;
   }
-  if (o.type === W.IFCMATERIAL) { out.push({ name: o.Name?.value || "", thickness: 0 }); return out; }
+  if (o.type === W.IFCMATERIAL) { out.push({ name: o.Name?.value || "", category: o.Category?.value || "", thickness: 0 }); return out; }
   for (const v of Object.values(o)) {
     if (Array.isArray(v)) v.forEach((x) => materialLayers(x, W, out, depth + 1));
     else materialLayers(v, W, out, depth + 1);
@@ -89,6 +89,17 @@ export function grossArea(elements, size, floors) {
   return area > 0 ? { area, basis: "slab" } : { area: size[0] * size[2] * floors, basis: "bbox" };
 }
 
+export function massUnitTons(unit) {
+  if (!unit || enumOf(unit.UnitType) !== "MASSUNIT") return NaN;
+  if (unit.ConversionFactor) {
+    const conversion = unit.ConversionFactor;
+    return Number(conversion.ValueComponent?.value) * massUnitTons(conversion.UnitComponent);
+  }
+  if (enumOf(unit.Name) !== "GRAM") return NaN;
+  const prefix = enumOf(unit.Prefix);
+  return (prefix ? PREFIX[prefix] : 1) / 1e6;
+}
+
 export async function parseIfc(buffer) {
   const W = await import(CDN + "web-ifc-api.js");
   const api = new W.IfcAPI();
@@ -99,11 +110,34 @@ export async function parseIfc(buffer) {
     const catOf = new Map(Object.entries(CATEGORY).filter(([k]) => W[k] != null).map(([k, c]) => [W[k], c]));
     const ids = (t) => { const v = api.GetLineIDsWithType(model, t); return Array.from({ length: v.size() }, (_, i) => v.get(i)); };
     const [ua] = ids(W.IFCUNITASSIGNMENT);
-    const scale = ua ? lengthScale(api.GetLine(model, ua, true).Units || []) : 1;
+    const units = ua ? api.GetLine(model, ua, true).Units || [] : [];
+    const scale = lengthScale(units);
+    const projectMass = units.find(u => enumOf(u.UnitType) === "MASSUNIT");
+    const weights = new Map();
+    for (const rid of ids(W.IFCRELDEFINESBYPROPERTIES)) {
+      const relation = api.GetLine(model, rid);
+      const id = relation.RelatingPropertyDefinition?.value;
+      if (!id || api.GetLineType(model, id) !== W.IFCELEMENTQUANTITY) continue;
+      for (const ref of api.GetLine(model, id).Quantities || []) {
+        if (api.GetLineType(model, ref.value) !== W.IFCQUANTITYWEIGHT) continue;
+        const quantity = api.GetLine(model, ref.value, true);
+        const priority = ["grossweight","추정중량","netweight","순중량"].indexOf(String(quantity.Name?.value || "").toLowerCase().replace(/\s/g,""));
+        if (priority < 0) continue;
+        const tons = Number(quantity.WeightValue?.value) * massUnitTons(quantity.Unit || projectMass);
+        if (!Number.isFinite(tons) || tons <= 0) continue;
+        for (const object of relation.RelatedObjects || []) {
+          if ((weights.get(object.value)?.priority ?? -1) < priority) weights.set(object.value, {priority, tons});
+        }
+      }
+    }
 
     // 층: 높이순으로 1, 2, 3…
     const storeys = ids(W.IFCBUILDINGSTOREY)
-      .map((id) => ({ id, elev: api.GetLine(model, id).Elevation?.value ?? 0 }))
+      .map((id) => {
+        const level = api.GetLine(model, id);
+        const name = String(level.Name?.value ?? "").trim();
+        return { id, elev: level.Elevation?.value ?? 0, basement: /^(?:B\s*\d+|지하|Basement)/i.test(name), roof: /^(?:RF\b|PH\b|Roof|옥상|옥탑|지붕)/i.test(name) };
+      })
       .sort((a, b) => a.elev - b.elev);
     const floorOfStorey = new Map(storeys.map((s, i) => [s.id, i + 1]));
     const floorOf = new Map();
@@ -116,7 +150,7 @@ export async function parseIfc(buffer) {
     const matOf = new Map();
     for (const rid of ids(W.IFCRELASSOCIATESMATERIAL)) {
       const r = api.GetLine(model, rid);
-      const layers = materialLayers(api.GetLine(model, r.RelatingMaterial.value, true), W).filter((l) => l.name);
+      const layers = materialLayers(api.GetLine(model, r.RelatingMaterial.value, true), W).filter((l) => l.name || l.category);
       for (const o of r.RelatedObjects || []) matOf.set(o.value, layers);
     }
     const typeOf = new Map();
@@ -177,8 +211,10 @@ export async function parseIfc(buffer) {
       return {
         expressID: id, globalId: line.GlobalId?.value || "", tag: line.Tag?.value || "", name: line.Name?.value || "",
         category, predefined: pre || "",
+        basement: storeys[(floorOf.get(id) ?? 0) - 1]?.basement ?? false,
+        roofLevel: storeys[(floorOf.get(id) ?? 0) - 1]?.roof ?? false,
         floor: category === "footing" ? 0 : floorOf.get(id) || 1,
-        volume: a.volume,
+        volume: a.volume, weightTons: weights.get(id)?.tons,
         area: openingArea(w, h, a.surface),
         layers: matOf.get(id) || matOf.get(typeOf.get(id)) || [],
       };
@@ -186,7 +222,13 @@ export async function parseIfc(buffer) {
     // 층수: 부재가 실제로 들어 있는 층만 센다 (Revit의 기준 레벨·지붕 레벨 제외)
     const used = new Set(elements.filter((e) => e.category !== "footing").map((e) => e.floor));
     const floors = used.size || storeys.length || 1;
-    return { meshes, elements, size, floors, lengthScale: scale, gross: grossArea(elements, size, floors) };
+    const aboveFloors = new Set(elements.filter(e => e.category !== "footing" && !e.basement && !e.roofLevel).map(e => e.floor)).size;
+    const aboveArea = grossArea(elements.filter(e => !e.basement && !e.roofLevel && e.category !== "footing"), size, aboveFloors || 1).area;
+    const buildings = ids(W.IFCBUILDING).map(id => api.GetLine(model,id));
+    const description = buildings.flatMap(b => [b.Name, b.LongName, b.ObjectType, b.Description]).map(v => v?.value || "").join(" ");
+    const usage = /아파트|공동주택|apartment/i.test(description) ? "공동주택"
+      : /단독주택|single.family/i.test(description) ? "단독주택" : null;
+    return { meshes, elements, size, floors, aboveFloors, aboveArea, usage, lengthScale: scale, gross: grossArea(elements, size, floors) };
   } finally {
     api.CloseModel(model);
   }
