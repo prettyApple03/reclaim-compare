@@ -45,6 +45,12 @@ def read_rows(path):
     return rows
 
 
+try:
+    TEXT_TYPE = basestring  # IronPython 2: JSON strings may be str or unicode.
+except NameError:
+    TEXT_TYPE = str
+
+
 def read_revit_export(path):
     payload = json.loads(read_export_text(path))
     if not isinstance(payload, dict) or payload.get("schema") != "reclaim-revit-v1":
@@ -53,7 +59,7 @@ def read_revit_export(path):
     if not isinstance(rows, list) or not rows or not summary["source"]:
         raise ValueError("Missing ReClaim model or element results")
     for row in rows:
-        if not all(isinstance(row[key], type(u"")) for key in ("ElementId", "Category") + TEXT):
+        if not all(isinstance(row[key], TEXT_TYPE) for key in ("ElementId", "Category") + TEXT):
             raise ValueError("Invalid ReClaim element fields")
         for key in NUMBER:
             value = float(row[key])
@@ -275,8 +281,8 @@ def run_in_revit():
     try:
         data, rows = read_revit_export(path)
         project_summary = summary_text(data)
-    except (IOError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
-        forms.alert(u"ReClaim 사이트에서 ‘Revit용 결과 다운로드’로 받은 파일을 선택하세요.")
+    except (IOError, ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
+        forms.alert(u"Revit용 결과를 읽지 못했습니다.\n{}\n\n오류: {}".format(os.path.basename(path), error))
         return
     if not forms.alert(
             u"분석 대상: {}\n열린 Revit 모델: {}\n\n이 모델에 결과를 적용하시겠습니까?".format(
