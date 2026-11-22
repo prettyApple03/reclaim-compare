@@ -72,7 +72,7 @@ def read_revit_export(path):
 def summary_text(s):
     """요약 JSON → 프로젝트 정보에 넣을 한 줄."""
     return u"압쇄 {:,}원 / 분별 {:,}원 / 차이 {:,}원 / 분별이 더 쌀 확률 {:.1%} / 권장 {}".format(
-        s["crush_total_won"], s["selective_total_won"], s["delta_won"], s["p_selective_cheaper"],
+        s["crush_total_won"], s["selective_total_won"], s["delta_won"], float(s["p_selective_cheaper"]),
         recommended_method(s))
 
 
@@ -92,7 +92,7 @@ def sheet_text(s, done, missing):
         u"압쇄해체 순비용    {:,} 원".format(s["crush_total_won"]),
         u"분별해체 순비용    {:,} 원".format(s["selective_total_won"]),
         u"순비용 차이(분별 − 압쇄)    {:+,} 원".format(s["delta_won"]),
-        u"분별해체가 더 저렴할 확률    {:.1%}".format(s["p_selective_cheaper"]),
+        u"분별해체가 더 저렴할 확률    {:.1%}".format(float(s["p_selective_cheaper"])),
         u"비교 결과    {}".format(recommended_method(s)),
         u"",
         u"부재 결과: {}개 기록 / {}개 매칭 또는 기록 실패".format(done, missing),
