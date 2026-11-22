@@ -69,11 +69,21 @@ test("물량 합산, 원단위 보충, 부재별 결과 CSV", () => {
   const s = supplement(q, "공동주택", rates);
   near(s.t.wood, 15); near(s.t.resin, 26.1); near(s.t.mixed, 163.7); near(s.t.concrete, 240);
   const res = elementResults(list, paramValues(rates));
-  assert.deepEqual(res.map((r) => r.method), ["압쇄", "분별", "분별"]);
+  // 처리 방식은 실제 작업 기준: 슬래브는 압쇄, 합판·동관은 선철거(분별)
+  assert.deepEqual(res.map((r) => r.method), ["압쇄 해체", "분별 해체", "분별 해체"]);
   assert.ok(res[2].revenue > 1e6 && res[0].disposal > 0);
   const csv = toCsv(res).trim().split("\n");
   assert.equal(csv.length, 4);
-  assert.ok(csv[0].startsWith("GlobalId,ElementId") && csv[1].startsWith("G,42,slab,1,concrete,압쇄,240.0000"));
+  assert.ok(csv[0].startsWith("GlobalId,ElementId") && csv[1].startsWith("G,42,slab,1,concrete,압쇄 해체,240.0000"));
+  // 압쇄 해체로 표시한 슬래브에서도 철근 매각수익이 생기고, 회수율만큼 공법별로 다르다
+  const p = paramValues(rates);
+  const selective = elementResults(list, p, p.fee_mixed_unverified, q, "selective");
+  const crush = elementResults(list, p, p.fee_mixed_unverified, q, "crush");
+  assert.equal(selective[0].method, "압쇄 해체");
+  assert.ok(selective[0].revenue > 0 && crush[0].revenue > 0);
+  near(selective[0].revenue / crush[0].revenue, p.rec_scrap_sel / p.rec_scrap_crush);
+  // 일괄 압쇄에서는 아무것도 선철거하지 않는다
+  assert.deepEqual(crush.map((r) => r.method), ["압쇄 해체", "압쇄 해체", "압쇄 해체"]);
 });
 
 test("개방형 철골과 바닥이 있는 철골 건물 구분", () => {
