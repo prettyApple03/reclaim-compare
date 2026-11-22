@@ -4,6 +4,7 @@ import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validat
 import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js?v=ifc-equipment-days-1";
 import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=ifc-finish-flow-1";
 import { COST_PARTS, REVENUE_COLOR, stackedBars, tornadoChart, histChart, legend, mil, num } from "./charts.js";
+import { reportHtml, kstStamp, fitSchedules } from "./report.js?v=sheets-1";
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -1111,7 +1112,8 @@ function exportTab(d) {
         <button class="btn btn-outline" data-act="json">요약 JSON</button>
         <button class="btn btn-outline" data-act="print">보고서 인쇄 · PDF</button>
       </div>
-      <pre class="mono" style="margin-top:16px;white-space:pre-wrap">${esc(JSON.stringify(summary(d), null, 2))}</pre>
+      <p class="caption muted" style="margin-top:12px">보고서 인쇄 · PDF는 Revit 시트와 같은 구성의 RC-01 경제성 비교${state.source === "ifc" ? ", RC-02 전면 분별, RC-03 일괄 압쇄" : ""}를 A1 종이로 출력합니다. 인쇄 창에서 대상을 ‘PDF로 저장’으로 고르세요.</p>
+      <details style="margin-top:12px"><summary>요약 JSON 보기</summary><pre class="mono" style="margin-top:12px;white-space:pre-wrap">${esc(JSON.stringify(summary(d), null, 2))}</pre></details>
     </section>
     ${state.source === "ifc" ? `<section class="card"><h2>Revit에 결과 넣기</h2>
       <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
@@ -1163,6 +1165,47 @@ async function revitCostChart(d) {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+// 보고서 인쇄: Revit RC-01~03과 같은 구성의 시트를 만들어 인쇄 창을 연다.
+async function printReport(d) {
+  const byGlobalId = new Map(d.classified.map((e) => [e.globalId, e]));
+  const elements = state.source === "ifc" ? exportElementRows(d).map((r) => ({
+    ...r,
+    categoryLabel: CATEGORY_LABEL[r.category] ?? r.category,
+    typeName: byGlobalId.get(r.globalId)?.name ?? "",
+    streamLabel: STREAM_LABEL[r.stream] ?? r.stream,
+  })) : [];
+  const [chartPng, modelPng] = await Promise.all([
+    revitCostChart(d).catch(() => null),
+    modelSnapshot(d).catch(() => null),
+  ]);
+  const report = $("#print-report") ?? document.body.appendChild(Object.assign(document.createElement("div"), { id: "print-report" }));
+  report.innerHTML = reportHtml({
+    summary: summary(d), elements, chartPng, modelPng,
+    costs: Object.fromEntries(["selective", "crush"].map((key) => [key, { disposal: d.cmp[key].disposal, revenue: d.cmp[key].revenue }])),
+    logo: "assets/img/title-logo.jpg", url: location.origin + location.pathname, stamp: kstStamp(),
+  });
+  await Promise.all([...report.querySelectorAll("img")].map((img) => img.decode().catch(() => {})));
+  report.classList.add("rp-measure");
+  fitSchedules(report);
+  report.classList.remove("rp-measure");
+  document.body.classList.add("rp-printing");
+  const done = () => { document.body.classList.remove("rp-printing"); report.innerHTML = ""; };
+  window.addEventListener("afterprint", done, { once: true });
+  window.print();
+}
+
+// 보고서용 3D 그림: 분별 대상은 초록, 압쇄 대상은 회색으로 화면 밖에서 한 번 그린다.
+async function modelSnapshot(d) {
+  if (!state.model) return null;
+  const byId = new Map(d.classified.map((e) => [e.expressID, e]));
+  const color = (id) => { const e = byId.get(id); if (!e || e.stream === "excluded") return null; return SEPARATED.has(e.stream) ? METHOD_COLOR.분별 : METHOD_COLOR.압쇄; };
+  const box = Object.assign(document.createElement("div"), { style: "position:fixed;left:-10000px;top:0;width:1600px;height:1000px" });
+  document.body.append(box);
+  const { createViewer } = await import("./viewer3d.js");
+  const view = createViewer(box, state.model, color, null, { width: 1600, height: 1000, animate: false, grid: false });
+  try { return view.snapshot(); } finally { view.dispose(); box.remove(); }
 }
 
 function download(name, text, type) {
@@ -1251,7 +1294,7 @@ document.addEventListener("click", async (e) => {
   }
   if (act === "csv") return download("reclaim_elements.csv", "﻿" + toCsv(exportElementRows(d)), "text/csv");
   if (act === "json") return download("reclaim_summary.json", JSON.stringify(summary(d), null, 2), "application/json");
-  if (act === "print") return window.print();
+  if (act === "print") return d?.cmp ? printReport(d) : window.print();
 });
 
 document.addEventListener("change", async (e) => {
