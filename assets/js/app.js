@@ -1107,7 +1107,7 @@ function exportTab(d) {
   preview.push(...res.filter(r => r.category === "adjustment"));
   return `<section class="card"><h2>결과 내보내기</h2>
       <div class="row no-print">
-        ${state.source === "ifc" ? `<button class="btn btn-primary" data-act="csv">부재별 결과 CSV</button>` : ""}
+        ${state.source === "ifc" ? `<button class="btn btn-primary" data-act="revit">Revit용 결과 다운로드</button> <button class="btn btn-outline" data-act="csv">부재별 결과 CSV</button>` : ""}
         <button class="btn btn-outline" data-act="json">요약 JSON</button>
         <button class="btn btn-outline" data-act="print">보고서 인쇄 · PDF</button>
       </div>
@@ -1115,9 +1115,9 @@ function exportTab(d) {
     </section>
     ${state.source === "ifc" ? `<section class="card"><h2>Revit에 결과 넣기</h2>
       <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
-        <li><strong>부재별 결과 CSV</strong>와 <strong>요약 JSON</strong>을 내려받습니다.</li>
+        <li><strong>Revit용 결과 다운로드</strong>로 부재별 결과와 요약이 담긴 파일 하나를 받습니다.</li>
         <li>Revit에서 원본 모델을 열고, 저장소의 <span class="mono">revit/ReClaim_SharedParams.txt</span>를 공유 매개변수 파일로 지정합니다.</li>
-        <li>pyRevit으로 <span class="mono">revit/write_results.py</span>를 실행해 CSV를 고릅니다. 부재마다 <span class="mono">RC_Waste, RC_Method, RC_Tons, RC_DisposalCost, RC_Revenue</span>가 기록됩니다.</li>
+        <li>pyRevit으로 <span class="mono">revit/write_results.py</span>를 실행해 내려받은 <span class="mono">.reclaim.json</span> 파일을 고릅니다. 부재마다 <span class="mono">RC_Waste, RC_Method, RC_Tons, RC_DisposalCost, RC_Revenue</span>가 기록됩니다.</li>
         <li>.rvt로 저장합니다. <span class="mono">RC_Method</span>로 필터를 만들면 분별 대상만 색으로 볼 수 있습니다.</li>
       </ol>
       <h2 style="margin-top:20px">부재별 결과 미리보기 <span class="caption muted">(${num(d.classified.length)}개 중 최대 12개, 전면 분별 기준)</span></h2>
@@ -1140,7 +1140,7 @@ const HEAD = {
   rates: ["단가", "노임, 품, 처리비, 매각가, 회수율입니다. 모든 값에 출처와 기준 연도를 표시합니다."],
   compare: ["공법 비교", "일괄 압쇄와 전면 분별해체의 인건비·장비비·처리비·매각수익·간접비를 비교합니다."],
   validation: ["해체계획서 검증·보정", "계획 공기와 사이트 계산을 비교하고, 유사한 현장 자료로 구조체 공기를 보정합니다."],
-  export: ["내보내기", "부재별 결과를 CSV로 내보내 Revit 모델에 기록합니다."],
+  export: ["내보내기", "부재별 결과와 비교 요약을 한 파일로 내보내 Revit 모델에 기록합니다."],
 };
 
 function render() {
@@ -1189,7 +1189,24 @@ document.addEventListener("click", async (e) => {
     sim = null; return render();
   }
   if (act === "reset") { state.p = { ...defaults }; sim = null; save(); return render(); }
-  if (["csv", "json"].includes(act) && !d?.cmp) return;
+  if (["csv", "json", "revit"].includes(act) && !d?.cmp) return;
+  if (act === "revit" && state.source === "ifc") {
+    const projectSummary = summary(d);
+    const name = (state.fileName || "reclaim").replace(/\.ifc$/i, "").replace(/[<>:"/\\|?*]/g, "_");
+    const elements = exportElementRows(d).map(r => ({
+      GlobalId: r.globalId,
+      ElementId: String(r.tag ?? ""),
+      Category: r.category,
+      RC_Waste: r.stream,
+      RC_Method: r.method,
+      RC_Tons: +r.tons.toFixed(4),
+      RC_DisposalCost: Math.round(r.disposal),
+      RC_Revenue: Math.round(r.revenue),
+    }));
+    return download(name + ".reclaim.json", JSON.stringify({
+      schema: "reclaim-revit-v1", summary: projectSummary, elements,
+    }, null, 2), "application/json");
+  }
   if (act === "csv") return download("reclaim_elements.csv", "﻿" + toCsv(exportElementRows(d)), "text/csv");
   if (act === "json") return download("reclaim_summary.json", JSON.stringify(summary(d), null, 2), "application/json");
   if (act === "print") return window.print();
