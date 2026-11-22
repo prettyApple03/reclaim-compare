@@ -7,6 +7,8 @@
 import io
 import json
 import os
+import base64
+import tempfile
 from collections import Counter
 from math import ceil, isinf, isnan
 from uuid import uuid4
@@ -15,6 +17,8 @@ TEXT = ("RC_Waste", "RC_Method")
 NUMBER = ("RC_Tons", "RC_DisposalCost", "RC_Revenue")
 RUN_PARAMETER = "RC_ResultRun"
 CRUSH_METHOD = "RC_CrushMethod"
+CRUSH_DISPOSAL = "RC_CrushDisposalCost"
+CRUSH_REVENUE = "RC_CrushRevenue"
 SHEET_NUMBER = "RC-01"
 SHEET_NAME = u"해체 경제성 비교"
 VIEW_NAME = u"ReClaim - 해체 대상 3D"
@@ -67,7 +71,8 @@ def read_revit_export(path):
             if isinf(value) or isnan(value):
                 raise ValueError("Invalid ReClaim numeric value")
             row[key] = value
-    summary = dict(summary, scenario_costs=payload.get("scenario_costs", {}))
+    summary = dict(summary, scenario_costs=payload.get("scenario_costs", {}),
+                   cost_chart_png=payload.get("cost_chart_png"))
     return summary, rows
 
 
@@ -193,19 +198,21 @@ def get_reclaim_sheet(DB, doc, number_prefix, name, legacy_name=None):
 
 def place_schedule(DB, doc, sheet, schedule):
     placed = DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.ScheduleSheetInstance)
-    if not any(instance.ScheduleId == schedule.Id for instance in placed):
-        DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, DB.XYZ(0.09, 0.99, 0))
+    instance = next((item for item in placed if item.ScheduleId == schedule.Id), None)
+    return instance or DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, DB.XYZ(0.09, 0.99, 0))
 
 
 def make_method_sheet(DB, doc, number, name, schedule, data, costs):
     sheet = get_reclaim_sheet(DB, doc, number, name)
-    place_schedule(DB, doc, sheet, schedule)
+    instance = place_schedule(DB, doc, sheet, schedule)
     text = u"대상 IFC: {}".format(data["source"])
     if costs:
         text += u"\n건물 전체 처리비 {:,}원 / 매각수익 {:,}원".format(
             costs["disposal"], costs["revenue"])
     if number == "RC-02":
         text += u"\n전면 분별 시나리오에서도 콘크리트 구조체 등은 압쇄 처리할 수 있습니다."
+    if number == "RC-03":
+        text += u"\n처리비·매각수익은 건물 전체 집계로 표시합니다."
     title = name + u"\n"
     notes = DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
     note = next((n for n in notes if n.Text.startswith(name)), None)
@@ -214,7 +221,52 @@ def make_method_sheet(DB, doc, number, name, schedule, data, costs):
         DB.TextNote.Create(doc, sheet.Id, DB.XYZ(0.09, 1.16, 0), title + text, style)
     else:
         note.Text = title + text
+    doc.Regenerate()
+    box = instance.get_BoundingBox(sheet)
+    footer_point = DB.XYZ(instance.Point.X, (box.Min.Y if box else instance.Point.Y) - 0.04, 0)
+    footer_label = u"최종 합계 (건물 전체 순비용)"
+    net = data["selective_total_won" if number == "RC-02" else "crush_total_won"]
+    footer_text = u"{}    {:,} 원".format(footer_label, net)
+    footer = next((n for n in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
+                   if n.Text.startswith(footer_label)), None)
+    if footer is None:
+        style = doc.GetDefaultElementTypeId(DB.ElementTypeGroup.TextNoteType)
+        footer = DB.TextNote.Create(doc, sheet.Id, footer_point, footer_text, style)
+    else:
+        footer.Text = footer_text
+        footer.Coord = footer_point
+    formatted = footer.GetFormattedText()
+    formatted.SetBoldStatus(DB.TextRange(0, len(footer_text)), True)
+    footer.SetFormattedText(formatted)
     return sheet
+
+
+def place_cost_chart(DB, doc, sheet, payload):
+    if not payload:
+        return
+    if len(payload) > 3000000:
+        raise ValueError("ReClaim chart is too large")
+    png = base64.b64decode(payload)
+    if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("ReClaim chart must be PNG")
+    prefix = "ReClaim_CostChart_"
+    previous = [im.Id for im in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.ImageInstance)
+                if doc.GetElement(im.GetTypeId()).Name.startswith(prefix)]
+    path = os.path.join(tempfile.gettempdir(), prefix + uuid4().hex + ".png")
+    try:
+        with open(path, "wb") as output:
+            output.write(png)
+        options = DB.ImageTypeOptions(path, False, DB.ImageTypeSource.Import)
+        image_type = DB.ImageType.Create(doc, options)
+        position = DB.ImagePlacementOptions(DB.XYZ(0.69, 0.35, 0), DB.BoxPlacement.Center)
+        image = DB.ImageInstance.Create(doc, sheet, image_type.Id, position)
+        image.LockProportions = True
+        image.Width = 1.20
+        for old_id in previous:
+            doc.Delete(old_id)
+    finally:
+        if os.path.isfile(path):
+            os.remove(path)
 
 
 def make_comparison_sheet(DB, doc, data, parameters, run_id, done, missing):
@@ -388,9 +440,12 @@ def run_in_revit():
             doc.ProjectInformation.get_Parameter(definitions["RC_Summary"].GUID).Set(project_summary)
             parameter_ids = {k: DB.SharedParameterElement.Lookup(doc, definitions[k].GUID).Id for k in keys}
             sheet = make_comparison_sheet(DB, doc, data, parameter_ids, run_id, done, missing)
+            place_cost_chart(DB, doc, sheet, data.get("cost_chart_png"))
             selective = make_schedule(DB, doc, DETAIL_NAME, parameter_ids, run_id, grouped=False)
             crush_ids = {key: parameter_ids[key] for key in ("RC_Waste", "RC_Tons", RUN_PARAMETER)}
-            crush_ids["RC_Method"] = DB.SharedParameterElement.Lookup(doc, definitions[CRUSH_METHOD].GUID).Id
+            for column, key in (("RC_Method", CRUSH_METHOD), ("RC_DisposalCost", CRUSH_DISPOSAL),
+                                ("RC_Revenue", CRUSH_REVENUE)):
+                crush_ids[column] = DB.SharedParameterElement.Lookup(doc, definitions[key].GUID).Id
             crush = make_schedule(DB, doc, u"ReClaim - 일괄 압쇄 부재별 처리 및 중량",
                                   crush_ids, run_id, grouped=False)
             costs = data.get("scenario_costs", {})
