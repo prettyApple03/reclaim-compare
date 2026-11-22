@@ -1205,6 +1205,10 @@ document.addEventListener("click", async (e) => {
     }));
     return download(name + ".reclaim.json", JSON.stringify({
       schema: "reclaim-revit-v1", summary: projectSummary, elements,
+      scenario_costs: Object.fromEntries(["selective", "crush"].map(key => [key, {
+        disposal: Math.round(d.cmp[key].disposal),
+        revenue: Math.round(d.cmp[key].revenue),
+      }])),
     }, null, 2), "application/json");
   }
   if (act === "csv") return download("reclaim_elements.csv", "﻿" + toCsv(exportElementRows(d)), "text/csv");
