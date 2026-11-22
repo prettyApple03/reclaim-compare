@@ -174,13 +174,10 @@ def make_comparison_sheet(DB, doc, data, parameters, run_id, done, missing):
         options = DB.TextNoteOptions(text_type)
         width = min(DB.TextElement.GetMaximumAllowedWidth(doc, text_type),
                     max(0.70, DB.TextElement.GetMinimumAllowedWidth(doc, text_type)))
-        DB.TextNote.Create(doc, sheet.Id, DB.XYZ(0.09, 0.89, 0), width, note_text, options)
+        note = DB.TextNote.Create(doc, sheet.Id, DB.XYZ(0.09, 0.89, 0), width, note_text, options)
     else:
         note.Text = note_text
 
-    if note is None:
-        note = next(n for n in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
-                    if n.Text.startswith(SHEET_NAME))
     # Exports before the style field was added also use the readable layout.
     if data.get("revit_sheet_style", "readable-v1") == "readable-v1":
         style_name = "ReClaim Summary 3.5mm"
