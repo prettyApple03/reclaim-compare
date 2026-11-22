@@ -518,7 +518,7 @@ def place_sheet_image(DB, doc, sheet, content, prefix, extension, point, width):
             os.remove(path)
 
 
-def draw_sheet_border(DB, doc, sheet):
+def draw_sheet_border(DB, doc, sheet, data):
     name = "ReClaim Sheet Border"
     lines = doc.Settings.Categories.get_Item(DB.BuiltInCategory.OST_Lines)
     category = next((item for item in lines.SubCategories if item.Name == name), None)
@@ -830,7 +830,7 @@ def run_in_revit():
             parameter_ids = {k: DB.SharedParameterElement.Lookup(doc, definitions[k].GUID).Id for k in keys}
             sheet = make_comparison_sheet(DB, doc, data, parameter_ids, run_id, done, missing)
             place_cost_chart(DB, doc, sheet, data.get("cost_chart_png"))
-            draw_sheet_border(DB, doc, sheet)
+            draw_sheet_border(DB, doc, sheet, data)
             selective = make_schedule(DB, doc, DETAIL_NAME, parameter_ids, run_id, grouped=False)
             crush_ids = {key: parameter_ids[key] for key in ("RC_Waste", "RC_Tons", RUN_PARAMETER)}
             for column, key in (("RC_Method", CRUSH_METHOD), ("RC_DisposalCost", CRUSH_DISPOSAL),
