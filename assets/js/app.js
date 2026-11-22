@@ -1,5 +1,5 @@
 // 화면과 상태. 계산은 scenario.js / sensitivity.js / classify.js가 한다.
-import { selectiveEquipmentHoursPerDay, costScenario, concreteCut, officeSalvage, steelDismantling, compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES, concreteGrades, concreteGradeLink, streamTons, PRESS_FINISH_BASELINE } from "./scenario.js?v=ifc-equipment-days-1";
+import { selectiveEquipmentHoursPerDay, costScenario, concreteCut, officeSalvage, steelDismantling, compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES, concreteGrades, streamTons, PRESS_FINISH_BASELINE } from "./scenario.js?v=fixed-concrete-1";
 import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validationCases, comparableCases, calibrateStructure, benchmark } from "./calibration.js";
 import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js?v=ifc-equipment-days-1";
 import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=finish-routing-2";
@@ -45,7 +45,7 @@ const disposalFields = ["boardWeight", "tileWeight", "boardCrush", "boardSel", "
 const concreteCutModes = [["crush", "압쇄", "Crush"], ["selective", "분별", "Sel"]];
 const concreteCutFields = concreteCutModes.flatMap(([, , suffix]) => ["Volume", "Cost", "Days"].map(field => "rcCut" + field + suffix));
 const caseFields = ["selectiveEquipmentQuote", "height", "equipment", "scope", "structure", "scaffold", "equipmentCrewPeriod", "craneDays", "parallelGain", "overlap", "mixedMineral", "mixedCombustible",
-  "cleanCrush", "cleanSel", "cleanPrice", "transportCrush", "transportSel", "cableCrush", "cableSel", "cablePrice", "cableCommon", "copperPipeSold", "pipeInstalled", "cableInstalled", "officeMaterials", ...frameFields, ...disposalFields, "glassPdPerM2", "mountedBucket", "mountedLarge", "carpenterShare", "boardM2", "tileM2", "pvcM2", "alM2", "generalFinishPd", "panelTons", "concreteCase", "groundFloors", "mountedProduction", "smallHours", "largeHours", "smallPrice", "largePrice", "concurrentHours", "cutSel", "cutCrush", "cutCommon", "steelTons", ...concreteCutFields, "openSteelCrushQuote", "openSteelSelectiveQuote", "openSteelCrushDays", "openSteelSelectiveDays"];
+  "cleanCrush", "cleanSel", "cleanPrice", "transportCrush", "transportSel", "cableCrush", "cableSel", "cablePrice", "cableCommon", "copperPipeSold", "pipeInstalled", "cableInstalled", "officeMaterials", ...frameFields, ...disposalFields, "glassPdPerM2", "mountedBucket", "mountedLarge", "carpenterShare", "boardM2", "tileM2", "pvcM2", "alM2", "generalFinishPd", "panelTons", "groundFloors", "mountedProduction", "smallHours", "largeHours", "smallPrice", "largePrice", "concurrentHours", "cutSel", "cutCrush", "cutCommon", "steelTons", ...concreteCutFields, "openSteelCrushQuote", "openSteelSelectiveQuote", "openSteelCrushDays", "openSteelSelectiveDays"];
 const defaultSiteInputs = { equipment: "auto", scope: "unknown", structure: "rc", scaffold: "yes", site: "normal", equipmentCrewPeriod: "structure" };
 const settings = ["area", "floors", "usage", "site", "labor", ...caseFields];
 const projectFields = [...settings, "overrides", "supplement", "seed", "caseId", "useCalibration", "calibrationType"];
@@ -621,14 +621,6 @@ function concreteGradeLabel(q, p, selective) {
     .map(grade => num(grade.share * 100, 1)).join(" / ");
 }
 
-function concreteGradeBasis(q, p) {
-  if (q.concreteCase !== "linked") return "고정 성상 가정";
-  const link = concreteGradeLink(q, p);
-  if (link.status === "missing-finish") return "마감 물량 미확인 · 추가 성상 개선 미반영";
-  if (link.status === "no-concrete") return "적용할 폐콘크리트 물량 없음";
-  return `04 아파트 보정 모델 · 현장 자료 미검증 · 추가 선철거 ${num(link.extraTons, 2)}t · 기준 대비 개선 ${num(link.factor * 100, 1)}%`;
-}
-
 function estimateAssumptions(q, p) {
   const office = officeSalvage(q, p);
   const rows = [
@@ -636,7 +628,7 @@ function estimateAssumptions(q, p) {
     ["동관 매각", `${num((office?.estimatePipe ? office.pipeKg * office.pipeRate / 1000 : q.copperPipeSold) ?? 0, 3)}t ${office?.estimatePipe ? "(추정) " : ""}· 양 공법 공통 · ${num(p.price_copper_pipe)}원/kg. IFC 구리 집계 ${num(q.copperModeledTons ?? 0, 3)}t`],
     ["폐전선 매각", `압쇄 ${num((office?.estimateCable ? office.cableKg * office.cableCrushRate / 1000 : q.cableCrush ?? q.cableCommon) ?? 0, 3)}t · 분별 ${num((office?.estimateCable ? office.cableKg * office.cableSelectiveRate / 1000 : q.cableSel ?? q.cableCommon) ?? 0, 3)}t ${office?.estimateCable ? "(추정)" : ""} · 피복 포함 ${num(q.cablePrice == null ? p.price_waste_cable : q.cablePrice / 1000)}원/kg`],
     ["미회수 기타 금속", `혼합 반출 · ${num(p.fee_mixed_unverified)}원/t`],
-    ["폐콘크리트 성상 배분", `${concreteGradeBasis(q, p)} · 압쇄 ${concreteGradeLabel(q, p, false)}% · 분별 ${concreteGradeLabel(q, p, true)}% (순수 / 가연물 제거 / 가연물 5% 이하). 별도 반입 견적 적용분은 이 배분에서 제외.`],
+    ["폐콘크리트 성상 배분", `비교용 고정 가정 · 압쇄 ${concreteGradeLabel(q, p, false)}% · 분별 ${concreteGradeLabel(q, p, true)}% (순수 / 가연물 제거 / 가연물 5% 이하). 현장 실측 성상 미확인. 별도 반입 견적 적용분은 이 배분에서 제외.`],
     ["보드·타일 공통 선철거", q.labor === "quantity" ? "보드 60%, 타일 100%" : "논문 차이 품 적용"],
     ["운반비", q.transportCrush == null || q.transportSel == null ? "두 공법 0원 가정" : "현장 견적 적용"],
     ["탑재 장비", equipmentMode(q) === "mounted"
@@ -875,7 +867,7 @@ function compareTab(d) {
       ${(crush.total < 0 || selective.total < 0) && (d.planReference || steel.excluded || hasUnpricedDisposal) ? '<p class="caption muted">음수 순비용은 고철 등 매각수익이 현재 포함된 비용보다 크다는 뜻입니다. 별도 공사비를 반영하면 전체 순비용은 달라집니다.</p>' : ""}
       ${d.planReference ? `<p class="caption muted">포함 항목 기준 · 바닥 슬래브 해체 공기·장비비 미포함 · 석면 해체비 별도 (지붕 슬레이트 ${num(d.planReference.asbestosArea.roof)}㎡ · 천장 약 ${num(d.planReference.asbestosArea.ceiling)}㎡, 계획서 p.${d.planReference.asbestosPage})</p>
       <p class="caption muted">계획서 폐기물량 참고 (p.${d.planReference.wastePage}) · ${Object.entries(d.planReference.wasteTons).map(([key, tons]) => `${STREAM_LABEL[key]} ${num(tons)}t`).join(" · ")} · ${esc(d.planReference.wasteScope)}로 처리비 미반영. 처리비는 IFC 물량 기준입니다.</p>` : ""}
-      <p class="caption muted">공수 기준 ${q.labor === "quantity" ? "자재별 작업량" : "논문의 면적당 차이 품"} · 폐콘크리트 성상 압쇄 ${concreteGradeLabel(q, p, false)}% · 분별 ${concreteGradeLabel(q, p, true)}% · ${concreteGradeBasis(q, p)}${q.transportCrush == null || q.transportSel == null ? " · 운반비 비교 미반영" : ""}</p>
+      <p class="caption muted">공수 기준 ${q.labor === "quantity" ? "자재별 작업량" : "논문의 면적당 차이 품"} · 폐콘크리트 성상 압쇄 ${concreteGradeLabel(q, p, false)}% · 분별 ${concreteGradeLabel(q, p, true)}% · 비교용 고정 가정${q.transportCrush == null || q.transportSel == null ? " · 운반비 비교 미반영" : ""}</p>
       ${(crush.transportQuote == null || selective.transportQuote == null) && delta !== 0 ? `<p class="caption muted">다른 비용이 같다면 ${delta > 0 ? "분별" : "압쇄"} 운반비가 상대 공법보다 ${num(Math.abs(delta))}원 적을 때 두 순비용이 같아집니다.</p>` : ""}
       <details id="finish-settlement"><summary>현장 중량·처리 견적</summary>
         <div class="form-grid">
@@ -917,7 +909,7 @@ function compareTab(d) {
         <ul>${["same", "standard", "good"].map(key => {
           const alternative = compare({ ...q, concreteCase: key }, p);
           const shares = CONCRETE_CASES[key].shares.map(value => num(value * 100)).join(" / ");
-          return `<li>분별 ${shares}% · 비용 차이 ${mil(alternative.delta, 2)}백만원</li>`;
+          return `<li>${esc(CONCRETE_CASES[key].label)} · 분별 ${shares}%${key === q.concreteCase ? " (현재 적용)" : ""} · 비용 차이 ${mil(alternative.delta, 2)}백만원</li>`;
         }).join("")}</ul>
       </details>
       <div class="table-wrap"><table class="tbl"><thead><tr><th>항목</th><th>적용 기준</th></tr></thead><tbody>
@@ -1079,7 +1071,7 @@ function summary(d) {
     input_issues: [...new Set([...crush.issues, ...selective.issues])],
     ...(state.planExample ? { plan_example: { source: state.plan.source, scope: state.plan.demolition?.scope, cost_note: state.planExample.costNote, asbestos_cost_excluded: state.plan.hazards?.asbestos === true } } : {}),
     concrete_intake_t: { crush: crush.concreteIntake, selective: selective.concreteIntake }, embedded_rebar_t: { crush: crush.embeddedRebar, selective: selective.embeddedRebar },
-    concrete_grade_link: d.q.concreteCase === "linked" ? concreteGradeLink(d.q, state.p) : null,
+    concrete_grade_link: null,
     concrete_grade_shares: {
       crush: concreteGrades(state.p, false, d.q.concreteCase, d.q).map(grade => grade.share),
       selective: concreteGrades(state.p, true, d.q.concreteCase, d.q).map(grade => grade.share),
@@ -1365,7 +1357,7 @@ document.addEventListener("change", async (e) => {
     state.areaConfirmed = false;
     state.area = Math.round((state.scope === "above" ? state.model.aboveArea : state.model.gross.area) * 100) / 100;
   }
-  else if (["concreteCase", "usage", "site", "labor", "equipment", "scope", "structure", "scaffold", "equipmentCrewPeriod"].includes(t.dataset.set)) state[t.dataset.set] = t.value;
+  else if (["usage", "site", "labor", "equipment", "scope", "structure", "scaffold", "equipmentCrewPeriod"].includes(t.dataset.set)) state[t.dataset.set] = t.value;
   else if (caseFields.includes(t.dataset.set)) {
     const key = t.dataset.set, v = t.value === "" ? undefined : Number(t.value);
     const limit = t.max ? Number(t.max) : Infinity;

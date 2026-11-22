@@ -112,8 +112,8 @@ export function streamTons(q, p) {
 // 기본값은 두 공법에 같은 배분을 쓰고, 분별안 가정은 사용자가 고르거나 처리장 견적(cleanSel·cleanPrice)으로 넣는다.
 export const DEFAULT_CONCRETE_CASE = "same";
 export const CONCRETE_CASES = {
-  same: { label: "양 공법 동일 (기본)", shares: [0.66, 0.26, 0.08] },
-  standard: { label: "분별 기본 가정", shares: [0.71, 0.26, 0.03] },
+  same: { label: "양 공법 동일", shares: [0.66, 0.26, 0.08] },
+  standard: { label: "분별 중간 가정", shares: [0.71, 0.26, 0.03] },
   good: { label: "분별 선별 양호 가정", shares: [0.80, 0.18, 0.02] },
 };
 
