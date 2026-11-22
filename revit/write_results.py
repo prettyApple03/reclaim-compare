@@ -258,15 +258,95 @@ def place_cost_chart(DB, doc, sheet, payload):
             output.write(png)
         options = DB.ImageTypeOptions(path, False, DB.ImageTypeSource.Import)
         image_type = DB.ImageType.Create(doc, options)
-        position = DB.ImagePlacementOptions(DB.XYZ(0.69, 0.35, 0), DB.BoxPlacement.Center)
+        position = DB.ImagePlacementOptions(DB.XYZ(1.00, 0.365, 0), DB.BoxPlacement.Center)
         image = DB.ImageInstance.Create(doc, sheet, image_type.Id, position)
         image.LockProportions = True
-        image.Width = 1.20
+        image.Width = 1.72
         for old_id in previous:
             doc.Delete(old_id)
     finally:
         if os.path.isfile(path):
             os.remove(path)
+
+
+def draw_comparison_layout(DB, doc, sheet, data, done, missing):
+    prefix = "ReClaim RC01 "
+    line_name = prefix + "rules"
+    lines = doc.Settings.Categories.get_Item(DB.BuiltInCategory.OST_Lines)
+    category = next((item for item in lines.SubCategories if item.Name == line_name), None)
+    if category is None:
+        category = doc.Settings.Categories.NewSubcategory(lines, line_name)
+        category.LineColor = DB.Color(110, 132, 155)
+    line_style = category.GetGraphicsStyle(DB.GraphicsStyleType.Projection)
+    old_notes = [note.Id for note in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
+                 if DB.Element.Name.GetValue(doc.GetElement(note.GetTypeId())).startswith(prefix)
+                 or note.Text.startswith(SHEET_NAME + u"\r")
+                 or note.Text.startswith(SHEET_NAME + u"\n")
+                 or note.Text.strip() == u"두 공법의 순비용 비교"]
+    old_rules = [curve.Id for curve in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.CurveElement)
+                 if curve.LineStyle is not None and curve.LineStyle.Id == line_style.Id]
+    for element_id in old_notes + old_rules:
+        doc.Delete(element_id)
+
+    styles = {}
+    for role, size, bold in (("Title", 6, True), ("Heading", 4, True), ("Body", 3.5, False)):
+        name = prefix + role
+        style = next((item for item in DB.FilteredElementCollector(doc).OfClass(DB.TextNoteType)
+                      if DB.Element.Name.GetValue(item) == name), None)
+        if style is None:
+            default_id = doc.GetDefaultElementTypeId(DB.ElementTypeGroup.TextNoteType)
+            style = doc.GetElement(default_id).Duplicate(name)
+            style.get_Parameter(DB.BuiltInParameter.TEXT_SIZE).Set(size / 304.8)
+            style.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_BOLD).Set(int(bold))
+        styles[role] = style.Id
+
+    def rule(x1, y1, x2, y2):
+        line = DB.Line.CreateBound(DB.XYZ(x1, y1, 0), DB.XYZ(x2, y2, 0))
+        doc.Create.NewDetailCurve(sheet, line).LineStyle = line_style
+
+    def frame(left, right, top, bottom, heading):
+        rule(left, top, right, top)
+        rule(left, bottom, right, bottom)
+        rule(left, bottom, left, top)
+        rule(right, bottom, right, top)
+        rule(left, top - 0.09, right, top - 0.09)
+        text(left + 0.035, top - 0.018, heading, "Heading")
+
+    def text(x, y, value, role="Body", right=False):
+        options = DB.TextNoteOptions(styles[role])
+        if right:
+            options.HorizontalAlignment = DB.HorizontalTextAlignment.Right
+        DB.TextNote.Create(doc, sheet.Id, DB.XYZ(x, y, 0), value, options)
+
+    text(0.10, 1.72, u"RC-01  해체 공법 경제성 비교", "Title")
+    area = data.get("area_m2")
+    area_text = u"{:,.1f} m\u00b2".format(float(area)) if area else u"미입력"
+    text(0.10, 1.59, u"{}  ·  연면적 {}".format(data.get("source") or u"IFC 모델", area_text))
+    frame(0.10, 1.10, 1.48, 0.73, u"순비용 비교")
+    frame(1.15, 1.90, 1.48, 0.73, u"해체 대상 3D")
+    frame(0.10, 1.90, 0.68, 0.13, u"공법별 비용 구성")
+
+    rows = (
+        (u"항목", u"결과"),
+        (u"일괄 압쇄", u"{:,}원".format(data["crush_total_won"])),
+        (u"전면 분별", u"{:,}원".format(data["selective_total_won"])),
+        (u"차액 (분별 − 압쇄)", u"{:+,}원".format(data["delta_won"])),
+        (u"분별이 더 저렴할 확률", u"{:.1%}".format(float(data["p_selective_cheaper"]))),
+        (u"비교 결과", recommended_method(data)),
+    )
+    for index, (label, value) in enumerate(rows):
+        y = 1.39 - index * 0.087
+        role = "Heading" if index in (0, 5) else "Body"
+        text(0.135, y - 0.018, label, role)
+        text(1.065, y - 0.018, value, role, right=True)
+        rule(0.10, y - 0.087, 1.10, y - 0.087)
+    rule(0.65, 1.39, 0.65, 1.39 - len(rows) * 0.087)
+    text(0.135, 0.842, u"부재 {}개 기록 · 매칭 또는 기록 실패 {}개".format(done, missing))
+    text(0.135, 0.788, u"부재별 결과는 RC-02 및 RC-03 참조")
+    if data.get("unpriced_concrete_cut") or any((data.get("unpriced_disposal") or {}).values()):
+        text(0.10, 0.105, u"일부 항목은 미산정 상태입니다.")
+    if not data.get("cost_chart_png"):
+        text(0.135, 0.53, u"비용 그래프는 사이트에서 새로 받은 Revit용 결과에 포함됩니다.")
 
 
 def make_comparison_sheet(DB, doc, data, parameters, run_id, done, missing):
@@ -275,53 +355,7 @@ def make_comparison_sheet(DB, doc, data, parameters, run_id, done, missing):
         if doc.GetElement(instance.ScheduleId).Name == SCHEDULE_NAME:
             doc.Delete(instance.Id)
 
-    note_text = sheet_text(data, done, missing)
-    notes = DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
-    note = next((n for n in notes if n.Text.startswith(SHEET_NAME)), None)
-    if note is None:
-        text_type = doc.GetDefaultElementTypeId(DB.ElementTypeGroup.TextNoteType)
-        options = DB.TextNoteOptions(text_type)
-        width = min(DB.TextElement.GetMaximumAllowedWidth(doc, text_type),
-                    max(0.70, DB.TextElement.GetMinimumAllowedWidth(doc, text_type)))
-        note = DB.TextNote.Create(doc, sheet.Id, DB.XYZ(0.09, 0.89, 0), width, note_text, options)
-    else:
-        note.Text = note_text
-
-    # Exports before the style field was added also use the readable layout.
-    if data.get("revit_sheet_style", "readable-v1") == "readable-v1":
-        style_name = "ReClaim Summary 3.5mm"
-        style = next((t for t in DB.FilteredElementCollector(doc).OfClass(DB.TextNoteType)
-                      if DB.Element.Name.GetValue(t) == style_name), None)
-        if style is None:
-            style = doc.GetElement(note.GetTypeId()).Duplicate(style_name)
-            style.get_Parameter(DB.BuiltInParameter.TEXT_SIZE).Set(3.5 / 304.8)
-        note.ChangeTypeId(style.Id)
-    lines = note_text.splitlines()
-    note.Text = u"\r".join(lines)
-    formatted = note.GetFormattedText()
-    formatted.SetBoldStatus(DB.TextRange(0, len(lines[0])), True)
-    for label in (u"압쇄해체 순비용", u"분별해체 순비용", u"순비용 차이"):
-        content = formatted.GetPlainText()
-        start = content.find(label)
-        if start >= 0:
-            end = content.find(u"\r", start)
-            formatted.SetBoldStatus(DB.TextRange(start, (end if end >= 0 else len(content)) - start), True)
-    note.SetFormattedText(formatted)
-    note.Width = 0.75
-    note.Coord = DB.XYZ(0.09, 0.99, 0)
-    subtitle = u"두 공법의 순비용 비교"
-    title = next((n for n in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
-                  if n.Text.strip() == subtitle), None)
-    if title is None:
-        default_type = doc.GetDefaultElementTypeId(DB.ElementTypeGroup.TextNoteType)
-        style_name = u"ReClaim 비교 제목 5mm"
-        style = next((t for t in DB.FilteredElementCollector(doc).OfClass(DB.TextNoteType)
-                      if DB.Element.Name.GetValue(t) == style_name), None)
-        if style is None:
-            style = doc.GetElement(default_type).Duplicate(style_name)
-            style.get_Parameter(DB.BuiltInParameter.TEXT_SIZE).Set(5.0 / 304.8)
-            style.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_BOLD).Set(1)
-        DB.TextNote.Create(doc, sheet.Id, DB.XYZ(0.09, 1.04, 0), subtitle, style.Id)
+    draw_comparison_layout(DB, doc, sheet, data, done, missing)
 
     view = next((v for v in DB.FilteredElementCollector(doc).OfClass(DB.View3D)
                  if v.Name == VIEW_NAME and not v.IsTemplate), None)
@@ -336,21 +370,30 @@ def make_comparison_sheet(DB, doc, data, parameters, run_id, done, missing):
     view.DisplayStyle = DB.DisplayStyle.ShadingWithEdges
     viewport = next((doc.GetElement(vid) for vid in sheet.GetAllViewports()
                      if doc.GetElement(vid).ViewId == view.Id), None)
+    center = DB.XYZ(1.525, 1.035, 0)
     if viewport is None:
         if not DB.Viewport.CanAddViewToSheet(doc, sheet.Id, view.Id):
             raise ValueError(u"해체 대상 3D 뷰가 다른 시트에 배치되어 있습니다.")
-        center = DB.XYZ(1.04, 0.72, 0)
         viewport = DB.Viewport.Create(doc, sheet.Id, view.Id, center)
-    else:
-        center = viewport.GetBoxCenter()
+    type_name = "ReClaim RC01 viewport"
+    current = doc.GetElement(viewport.GetTypeId())
+    viewport_type = next((doc.GetElement(tid) for tid in viewport.GetValidTypes()
+                          if DB.Element.Name.GetValue(doc.GetElement(tid)) == type_name), None)
+    if viewport_type is None:
+        viewport_type = current.Duplicate(type_name)
+    show_title = viewport_type.get_Parameter(DB.BuiltInParameter.VIEWPORT_ATTR_SHOW_LABEL)
+    if show_title is not None and not show_title.IsReadOnly:
+        show_title.Set(0)
+    if viewport.GetTypeId() != viewport_type.Id:
+        viewport.ChangeTypeId(viewport_type.Id)
     doc.Regenerate()
     outline = viewport.GetBoxOutline()
     size = outline.MaximumPoint - outline.MinimumPoint
-    ratio = max(size.X / 0.50, size.Y / 0.29)
+    ratio = max(size.X / 0.63, size.Y / 0.48)
     if ratio > 1 or ratio < 0.75:
-        view.Scale = max(10, int(ceil(view.Scale * ratio / 10.0)) * 10)
+        view.Scale = max(1, int(ceil(view.Scale * ratio)))
         doc.Regenerate()
-        viewport.SetBoxCenter(center)
+    viewport.SetBoxCenter(center)
     return sheet
 
 
