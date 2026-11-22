@@ -15,3 +15,4 @@ assets/data/plans/kalis/*
 !assets/data/plans/kalis/06-office-below.json
 !assets/data/plans/kalis/07-factory.json
 scripts/make_private_plan.mjs
+__pycache__/
