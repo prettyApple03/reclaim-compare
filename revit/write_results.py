@@ -289,15 +289,16 @@ def draw_comparison_layout(DB, doc, sheet, data, done, missing):
         doc.Delete(element_id)
 
     styles = {}
-    for role, size, bold in (("Title", 6, True), ("Heading", 4, True), ("Body", 3.5, False)):
+    for role, size, bold in (("Title", 8, True), ("Heading", 6, True), ("Body", 4.5, False),
+                             ("Table", 6, False), ("Amount", 7, True)):
         name = prefix + role
         style = next((item for item in DB.FilteredElementCollector(doc).OfClass(DB.TextNoteType)
                       if DB.Element.Name.GetValue(item) == name), None)
         if style is None:
             default_id = doc.GetDefaultElementTypeId(DB.ElementTypeGroup.TextNoteType)
             style = doc.GetElement(default_id).Duplicate(name)
-            style.get_Parameter(DB.BuiltInParameter.TEXT_SIZE).Set(size / 304.8)
-            style.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_BOLD).Set(int(bold))
+        style.get_Parameter(DB.BuiltInParameter.TEXT_SIZE).Set(size / 304.8)
+        style.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_BOLD).Set(int(bold))
         styles[role] = style.Id
 
     def rule(x1, y1, x2, y2):
@@ -336,9 +337,10 @@ def draw_comparison_layout(DB, doc, sheet, data, done, missing):
     )
     for index, (label, value) in enumerate(rows):
         y = 1.39 - index * 0.087
-        role = "Heading" if index in (0, 5) else "Body"
-        text(0.135, y - 0.018, label, role)
-        text(1.065, y - 0.018, value, role, right=True)
+        role = "Heading" if index in (0, 5) else "Table"
+        value_role = "Amount" if index in (1, 2, 3) else role
+        text(0.135, y - 0.022, label, role)
+        text(1.065, y - 0.022, value, value_role, right=True)
         rule(0.10, y - 0.087, 1.10, y - 0.087)
     rule(0.65, 1.39, 0.65, 1.39 - len(rows) * 0.087)
     text(0.135, 0.842, u"부재 {}개 기록 · 매칭 또는 기록 실패 {}개".format(done, missing))
