@@ -500,7 +500,7 @@ def place_cost_chart(DB, doc, sheet, payload):
 
 def place_sheet_image(DB, doc, sheet, content, prefix, extension, point, width):
     previous = [im.Id for im in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.ImageInstance)
-                if doc.GetElement(im.GetTypeId()).Name.startswith(prefix)]
+                if DB.Element.Name.GetValue(doc.GetElement(im.GetTypeId())).startswith(prefix)]
     path = os.path.join(tempfile.gettempdir(), prefix + uuid4().hex + extension)
     try:
         with open(path, "wb") as output:
@@ -549,7 +549,7 @@ def draw_sheet_border(DB, doc, sheet):
         for element in DB.FilteredElementCollector(doc, sheet.Id).OfClass(element_type):
             if element.OwnerViewId != sheet.Id:
                 continue
-            if isinstance(element, DB.ImageInstance) and doc.GetElement(element.GetTypeId()).Name.startswith("ReClaim_TitleLogo_"):
+            if isinstance(element, DB.ImageInstance) and DB.Element.Name.GetValue(doc.GetElement(element.GetTypeId())).startswith("ReClaim_TitleLogo_"):
                 continue
             box = element.get_BoundingBox(sheet)
             if box is not None:
