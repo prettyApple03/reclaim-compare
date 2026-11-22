@@ -1115,7 +1115,7 @@ function exportTab(d) {
     </section>
     ${state.source === "ifc" ? `<section class="card"><h2>Revit에 결과 넣기</h2>
       <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
-        <li><strong>Revit용 결과 다운로드</strong>로 부재별 결과와 요약이 담긴 파일 하나를 받습니다.</li>
+        <li><strong>Revit용 결과 다운로드</strong>로 부재별 결과, 순비용 요약, 공법별 비용 구성 그래프가 담긴 파일을 받습니다.</li>
         <li>Revit에서 원본 모델을 열고, 저장소의 <span class="mono">revit/ReClaim_SharedParams.txt</span>를 공유 매개변수 파일로 지정합니다.</li>
         <li>pyRevit으로 <span class="mono">revit/write_results.py</span>를 실행해 내려받은 <span class="mono">.reclaim.json</span> 파일을 고릅니다. 부재마다 <span class="mono">RC_Waste, RC_Method, RC_Tons, RC_DisposalCost, RC_Revenue</span>가 기록됩니다.</li>
         <li>.rvt로 저장합니다. <span class="mono">RC_Method</span>로 필터를 만들면 분별 대상만 색으로 볼 수 있습니다.</li>
