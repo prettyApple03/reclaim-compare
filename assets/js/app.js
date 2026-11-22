@@ -3,7 +3,7 @@ import { selectiveEquipmentHoursPerDay, costScenario, concreteCut, officeSalvage
 import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validationCases, comparableCases, calibrateStructure, benchmark } from "./calibration.js";
 import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js?v=ifc-equipment-days-1";
 import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=ifc-finish-flow-1";
-import { stackedBars, tornadoChart, histChart, legend, mil, num } from "./charts.js";
+import { COST_PARTS, REVENUE_COLOR, stackedBars, tornadoChart, histChart, legend, mil, num } from "./charts.js";
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -1128,6 +1128,43 @@ function exportTab(d) {
     <div class="disclaimer"><div>프로젝트 기본값을 적용한 비교 결과입니다. 현장 견적과 반출 기록이 있으면 해당 값을 입력해 다시 계산할 수 있습니다.</div></div>`;
 }
 
+async function revitCostChart(d) {
+  const scenarios = [
+    { ...d.cmp.crush, name: "일괄 압쇄" },
+    { ...d.cmp.selective, name: "전면 분별" },
+  ];
+  const theme = getComputedStyle(document.documentElement);
+  const color = value => theme.getPropertyValue(value.slice(4, -1)).trim() || "#607080";
+  const svg = stackedBars(scenarios).split("</svg>")[0]
+    .replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" width="760" height="140" ')
+    .replace(/var\(--s\d+\)/g, color)
+    .replace("><rect", '><style>text{font:13px sans-serif;fill:#17263a}.c-value{font-weight:bold}.c-note{font-size:11px}.c-axis{stroke:#768498}</style><rect') + "</svg>";
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const canvas = Object.assign(document.createElement("canvas"), { width: 1520, height: 348 });
+    const ctx = canvas.getContext("2d");
+    ctx.scale(2, 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, 760, 174);
+    ctx.drawImage(image, 0, 0, 760, 140);
+    ctx.font = "13px sans-serif";
+    const labels = [...COST_PARTS.map(([, label, fill]) => [label, fill]), ["매각수익 (비용에서 뺌)", REVENUE_COLOR]];
+    labels.forEach(([label, fill], index) => {
+      const x = 12 + index * 108;
+      ctx.fillStyle = color(fill);
+      ctx.fillRect(x, 150, 13, 13);
+      ctx.fillStyle = "#17263a";
+      ctx.fillText(label, x + 19, 161);
+    });
+    return canvas.toDataURL("image/png").split(",")[1];
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function download(name, text, type) {
   const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([text], { type })), download: name });
   a.click();
@@ -1203,8 +1240,9 @@ document.addEventListener("click", async (e) => {
       RC_DisposalCost: Math.round(r.disposal),
       RC_Revenue: Math.round(r.revenue),
     }));
+    const costChart = await revitCostChart(d).catch(() => null);
     return download(name + ".reclaim.json", JSON.stringify({
-      schema: "reclaim-revit-v1", summary: projectSummary, elements,
+      schema: "reclaim-revit-v1", summary: projectSummary, elements, cost_chart_png: costChart,
       scenario_costs: Object.fromEntries(["selective", "crush"].map(key => [key, {
         disposal: Math.round(d.cmp[key].disposal),
         revenue: Math.round(d.cmp[key].revenue),
