@@ -522,7 +522,7 @@ async function mountViewer(d) {
   if (!box || !state.model) return;
   const byId = new Map(d.classified.map((e) => [e.expressID, e]));
   const color = (id) => { const e = byId.get(id); if (!e) return null; if (state.colorMode === "stream") return STREAM_COLOR[e.stream]; return SEPARATED.has(e.stream) ? METHOD_COLOR.분별 : [METHOD_COLOR.압쇄, 0.06]; }; // 압쇄 대상은 비쳐 보이게 해서 안쪽 내장재가 드러난다
-  const { createViewer } = await import("./viewer3d.js");
+  const { createViewer } = await import("./viewer3d.js?v=sheets-1");
   viewer = createViewer(box, state.model, color, (id) => {
     const e = byId.get(id);
     $("#pick").innerHTML = e ? `<strong>${CATEGORY_LABEL[e.category]}</strong> ${esc(e.name)} · ${e.floor}층 · ${num(e.tons, 3)} t · ${STREAM_LABEL[e.stream]} · ${SEPARATED.has(e.stream) ? "분별" : "압쇄"}<br><span class="muted">${esc(e.layers.map((l) => l.name).join(" + ") || "재료 없음")} · Revit ID ${esc(e.tag || "–")}</span>` : "부재를 누르면 정보가 나옵니다.";
@@ -1203,7 +1203,7 @@ async function modelSnapshot(d) {
   const color = (id) => { const e = byId.get(id); if (!e || e.stream === "excluded") return null; return SEPARATED.has(e.stream) ? METHOD_COLOR.분별 : METHOD_COLOR.압쇄; };
   const box = Object.assign(document.createElement("div"), { style: "position:fixed;left:-10000px;top:0;width:1600px;height:1000px" });
   document.body.append(box);
-  const { createViewer } = await import("./viewer3d.js");
+  const { createViewer } = await import("./viewer3d.js?v=sheets-1");
   const view = createViewer(box, state.model, color, null, { width: 1600, height: 1000, animate: false, grid: false });
   try { return view.snapshot(); } finally { view.dispose(); box.remove(); }
 }
