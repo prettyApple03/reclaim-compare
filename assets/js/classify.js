@@ -251,7 +251,8 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
     ? Math.min(x.tons, scale * rebarTons({ concrete_m3: x.m3, rebarKgPerM3: q.rebarKgPerM3 }, p.rebar_kg_per_m3)) : 0;
   return classified.map((el) => ({
     globalId: el.globalId, tag: el.tag, category: el.category, floor: el.floor, stream: el.stream,
-    method: el.stream === EXCLUDED ? "제외" : SEPARATED.has(el.stream) ? "분별" : "압쇄",
+    method: el.stream === EXCLUDED ? "제외"
+      : SEPARATED.has(el.stream) || el.parts.some(part => rebarOf(el, part) > 0) ? "분별 해체" : "압쇄",
     tons: el.tons,
     disposal: el.parts.reduce((s, x) => s + (x.tons - rebarOf(el, x)) * (q.windowMode && x.stream === "glass" && (el.category === "window" || el.parts.some(part => part.windowAssembly)) ? p.fee_mixed_unverified : fee(x.stream))
       + (q.fixedComparison && x.stream === "metal" && el.category !== "rebar" ? x.tons * (1 - (q.steelWork && isStructuralSteelPart(el, x) ? p.rec_structural_steel ?? p.rec_scrap_sel : p.rec_scrap_sel)) * p.fee_mixed_unverified : 0)
