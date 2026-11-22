@@ -399,89 +399,149 @@ TITLE_BLOCK_LOGO = (
 )
 
 
-def schedule_grid(height, width):
-    """Choose the smallest landscape frame that fits an even split."""
-    if height <= 1.35:
-        return 1, 1
-    best = None
-    for columns in range(1, 5):
-        # Repeat the column headers in each segment. The summary and title block
-        # take about a foot of vertical space outside the schedule grid.
-        grid_width = columns * width + (columns - 1) * 0.14
-        for rows in range(1, int(ceil(height / 1.35)) + 1):
-            count = columns * rows
-            segment_height = height / count + 0.10
-            if segment_height > 1.45:
-                continue
-            grid_height = rows * segment_height + (rows - 1) * 0.12
-            frame_width = max(grid_width + 0.09, (grid_height + 1.0) * 841.0 / 594.0)
-            candidate = (frame_width, count, columns)
-            if best is None or candidate < best:
-                best = candidate
-    return best[1], best[2]
+# A1 가로(841 x 594 mm) 한 장에 표를 실제 글자 크기로 배치한다. 단위는 ft.
+PAGE_WIDTH = 841.0 / 304.8
+PAGE_HEIGHT = 594.0 / 304.8
+FRAME_INSET = 0.07        # 종이 가장자리에서 테두리까지
+TITLE_BAND = 0.28         # 하단 표제란 높이
+INNER = 0.06              # 테두리 안쪽 여백
+HEADER = 0.49             # 표 위 요약 칸 높이
+TOTAL_ROW = 0.12          # 표 아래 합계 칸 높이
+GAP = 0.025
+COLUMN_GAP = 0.08
+SEGMENT_OVERHEAD = 0.10   # 나눈 표마다 반복되는 제목·머리글 높이
+MAX_COLUMNS = 4
 
 
-def place_schedule(DB, doc, sheet, schedule):
-    placements = [item for item in DB.FilteredElementCollector(doc).OfClass(DB.ScheduleSheetInstance)
-                  if item.ScheduleId == schedule.Id]
-    instances = [item for item in placements if item.OwnerViewId == sheet.Id]
-    origin = DB.XYZ(0.09, 0.99, 0)
+def method_frame():
+    left, bottom = FRAME_INSET, FRAME_INSET
+    right, top = PAGE_WIDTH - FRAME_INSET, PAGE_HEIGHT - FRAME_INSET
+    content_left, content_right = left + INNER, right - INNER
+    schedule_top = top - INNER - HEADER - GAP
+    schedule_floor = bottom + TITLE_BAND + INNER + TOTAL_ROW + GAP
+    return {"left": left, "right": right, "top": top, "bottom": bottom,
+            "content_left": content_left, "content_right": content_right,
+            "schedule_top": schedule_top, "schedule_floor": schedule_floor,
+            "height": schedule_top - schedule_floor, "width": content_right - content_left}
+
+
+def plan_pages(total_height, column_width, extra_segments=0):
+    """표 전체 높이와 한 열 너비 → (나눌 조각 수, 한 장의 열 수, 장 수).
+    같은 열에서는 위아래로 나누지 않고, 좌우 열로만 나눈다. 넘치면 장을 늘린다."""
+    frame = method_frame()
+    columns = int((frame["width"] + COLUMN_GAP) // (column_width + COLUMN_GAP))
+    columns = max(1, min(MAX_COLUMNS, columns))
+    if total_height <= frame["height"] and not extra_segments:
+        return 1, 1, 1
+    per_column = frame["height"] - SEGMENT_OVERHEAD
+    segments = max(2, int(ceil(total_height / per_column))) + extra_segments
+    pages = int(ceil(segments / float(columns)))
+    if pages > 1:
+        segments = pages * columns   # 여러 장이면 열 높이를 고르게 맞춘다
+    return segments, min(columns, segments), pages
+
+
+def page_numbers(number, pages):
+    if pages == 1:
+        return [number]
+    return [u"{}({}/{})".format(number, page, pages) for page in range(1, pages + 1)]
+
+
+def method_pages(DB, doc, number, name, pages):
+    """RC-02, RC-02(1/2) 처럼 이 스크립트가 만든 시트를 장 수에 맞춰 만들고 남는 장은 지운다."""
+    all_sheets = list(DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet))
+    def ours(sheet):
+        n = sheet.SheetNumber
+        return sheet.Name == name and (n == number or n.startswith(number + u"(") or n.startswith(number + u"-"))
+    def order(sheet):
+        digits = "".join(ch if ch.isdigit() else " " for ch in sheet.SheetNumber[len(number):]).split()
+        return int(digits[0]) if digits else 1
+    existing = sorted([sheet for sheet in all_sheets if ours(sheet)], key=order)
+    wanted = page_numbers(number, pages)
+    taken = {sheet.SheetNumber for sheet in all_sheets if not ours(sheet)}
+    clash = [n for n in wanted if n in taken]
+    if clash:
+        raise ValueError(u"시트 번호 {}를 다른 시트가 쓰고 있습니다. 그 시트 번호를 바꾼 뒤 다시 실행하세요.".format(clash[0]))
+    for sheet in existing[pages:]:
+        doc.Delete(sheet.Id)
+    sheets = existing[:pages]
+    for sheet in sheets:
+        sheet.SheetNumber = u"{}-tmp-{}".format(number, uuid4().hex[:8])
+    while len(sheets) < pages:
+        sheets.append(DB.ViewSheet.Create(doc, DB.ElementId.InvalidElementId))
+    for sheet, wanted_number in zip(sheets, wanted):
+        try:
+            sheet.SheetNumber = wanted_number
+        except Exception:
+            # 시트 번호에 / 를 쓸 수 없는 환경이면 RC-02(1-2) 형식을 쓴다.
+            sheet.SheetNumber = wanted_number.replace(u"/", u"-")
+        sheet.Name = name
+    return sheets
+
+
+def schedule_width(schedule):
     widths = {u"범주": 0.13, u"패밀리 및 유형": 0.32, u"폐기물 성상": 0.14,
               u"부재 처리 방식": 0.15, u"중량(t)": 0.13, u"처리비(원)": 0.16,
               u"매각수익(원)": 0.16}
-    visible_width = 0
+    visible = 0
     for field_id in schedule.Definition.GetFieldOrder():
         field = schedule.Definition.GetField(field_id)
         if field.ColumnHeading in widths:
             field.SheetColumnWidth = widths[field.ColumnHeading]
         if not field.IsHidden:
-            visible_width += field.SheetColumnWidth
+            visible += field.SheetColumnWidth
+    return visible
 
-    segment_count = schedule.GetSegmentCount()
-    if len(placements) == len(instances):
-        for instance in instances:
+
+def place_schedule_pages(DB, doc, number, name, schedule):
+    """표를 A1 시트들에 좌우 열로만 나눠 배치한다. 반환: [(시트, [표 조각들])]"""
+    frame = method_frame()
+    schedule_width(schedule)
+    for instance in DB.FilteredElementCollector(doc).OfClass(DB.ScheduleSheetInstance).ToElements():
+        if instance.ScheduleId == schedule.Id:
             doc.Delete(instance.Id)
-        for index in range(segment_count - 1, 0, -1):
-            schedule.MergeSegments(index, index - 1)
-        doc.Regenerate()
-        whole = DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, origin)
-        doc.Regenerate()
-        box = whole.get_BoundingBox(sheet)
-        segment_count, columns = schedule_grid(box.Max.Y - box.Min.Y, visible_width)
-        if segment_count == 1:
-            return [whole]
-        doc.Delete(whole.Id)
-        doc.Regenerate()
-        schedule.Split(segment_count)
-        schedule_count = schedule.GetSegmentCount()
-        instances = []
-    else:
-        # Segment definitions are shared by every sheet hosting this schedule.
-        # Keep those placements valid and only rearrange this sheet.
-        schedule_count = segment_count
-        columns = min(4, schedule_count)
-        if schedule_count == 1:
-            whole = instances[0] if instances else DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, origin)
-            whole.Point = origin
-            return [whole]
+    for index in range(schedule.GetSegmentCount() - 1, 0, -1):
+        schedule.MergeSegments(index, index - 1)
+    doc.Regenerate()
+    probe_sheet = method_pages(DB, doc, number, name, 1)[0]
+    whole = DB.ScheduleSheetInstance.Create(doc, probe_sheet.Id, schedule.Id,
+                                            DB.XYZ(frame["content_left"], frame["schedule_top"], 0))
+    doc.Regenerate()
+    box = whole.get_BoundingBox(probe_sheet)
+    total_height, column_width = box.Max.Y - box.Min.Y, box.Max.X - box.Min.X
+    doc.Delete(whole.Id)
+    doc.Regenerate()
 
-    by_segment = {item.SegmentIndex: item for item in instances}
-    result = []
-    row_top = origin.Y
-    for start in range(0, schedule_count, columns):
-        row = []
-        for index in range(start, min(start + columns, schedule_count)):
-            point = DB.XYZ(origin.X + (index - start) * (visible_width + 0.14), row_top, 0)
-            instance = by_segment.get(index)
-            if instance is None:
-                instance = DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, point, index)
-            else:
-                instance.Point = point
-            row.append(instance)
+    extra = 0
+    for _attempt in range(6):
+        segments, columns, pages = plan_pages(total_height, column_width, extra)
+        sheets = method_pages(DB, doc, number, name, pages)
+        for index in range(schedule.GetSegmentCount() - 1, 0, -1):
+            schedule.MergeSegments(index, index - 1)
+        if segments > 1:
+            schedule.Split(segments)
         doc.Regenerate()
-        row_top = min(item.get_BoundingBox(sheet).Min.Y for item in row) - 0.14
-        result.extend(row)
-    return result
+        placed = [[] for _ in sheets]
+        for index in range(segments):
+            page, column = divmod(index, columns)
+            point = DB.XYZ(frame["content_left"] + column * (column_width + COLUMN_GAP), frame["schedule_top"], 0)
+            if segments == 1:
+                instance = DB.ScheduleSheetInstance.Create(doc, sheets[page].Id, schedule.Id, point)
+            else:
+                instance = DB.ScheduleSheetInstance.Create(doc, sheets[page].Id, schedule.Id, point, index)
+            placed[page].append(instance)
+        doc.Regenerate()
+        tallest = max(item.get_BoundingBox(sheet).Max.Y - item.get_BoundingBox(sheet).Min.Y
+                      for sheet, items in zip(sheets, placed) for item in items)
+        if tallest <= frame["height"] + 0.005:
+            return list(zip(sheets, placed))
+        # 예상보다 머리글이 높으면 조각을 늘려 다시 배치한다.
+        for items in placed:
+            for item in items:
+                doc.Delete(item.Id)
+        doc.Regenerate()
+        extra += columns
+    return list(zip(sheets, placed))
 
 
 class SheetGrid(object):
@@ -519,8 +579,8 @@ class SheetGrid(object):
             style.get_Parameter(DB.BuiltInParameter.TEXT_SIZE).Set(size / 304.8)
             style.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_BOLD).Set(int(bold))
             self.types[key] = style
-        DB.TextNote.Create(self.doc, self.sheet.Id, DB.XYZ(x, y, 0), width,
-                           value, DB.TextNoteOptions(self.types[key].Id))
+        return DB.TextNote.Create(self.doc, self.sheet.Id, DB.XYZ(x, y, 0), width,
+                                  value, DB.TextNoteOptions(self.types[key].Id))
 
     def row(self, left, right, top, cells, height=0.10):
         bottom = top - height
@@ -534,36 +594,39 @@ class SheetGrid(object):
 
 
 def make_method_sheet(DB, doc, number, name, schedule, data, costs):
-    sheet = get_reclaim_sheet(DB, doc, number, name)
-    instances = place_schedule(DB, doc, sheet, schedule)
-    doc.Regenerate()
-    boxes = [i.get_BoundingBox(sheet) for i in instances]
-    left = min(b.Min.X for b in boxes)
-    right = max(b.Max.X for b in boxes)
-    top = max(b.Max.Y for b in boxes) + 0.025
-    bottom = min(b.Min.Y for b in boxes) - 0.025
-    for note in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote).ToElements():
-        if (note.Text.startswith(name + u"\r") or note.Text.startswith(name + u"\n")
-                or note.Text.startswith(u"최종 합계 (건물 전체 순비용)")):
-            doc.Delete(note.Id)
-    grid = SheetGrid(DB, doc, sheet, "ReClaim Method")
+    pages = place_schedule_pages(DB, doc, number, name, schedule)
+    frame = method_frame()
+    left, right = frame["content_left"], frame["content_right"]
     middle = (left + right) / 2
-    grid.row(left, right, top + 0.49, [(right, name, 10, True)], 0.11)
-    grid.row(left, right, top + 0.38, [(left + 0.32, u"대상 IFC", 5, True),
-                                       (right, data["source"], 6, False)])
+    top = frame["schedule_top"] + GAP
     amounts = [u"{:,}원".format(costs[key]) if costs else u"자료 없음" for key in ("disposal", "revenue")]
-    grid.row(left, right, top + 0.28, [(middle, u"건물 전체 처리비", 5, True),
-                                       (right, u"건물 전체 매각수익", 5, True)], 0.08)
-    grid.row(left, right, top + 0.20, [(middle, amounts[0], 9, True),
-                                       (right, amounts[1], 9, True)])
     scope = (u"전면 분별 시나리오에서도 콘크리트 구조체 등은 압쇄 처리할 수 있습니다."
              if number == "RC-02" else u"처리비와 매각수익은 건물 전체 집계입니다.")
-    grid.row(left, right, top + 0.10, [(right, scope, 5.5, False)])
     net = data["selective_total_won" if number == "RC-02" else "crush_total_won"]
-    grid.row(left, right, bottom, [(middle, u"최종 합계 · 건물 전체 순비용", 7, True),
-                                   (right, u"{:,}원".format(net), 10, True)], 0.12)
-    draw_sheet_border(DB, doc, sheet, data)
-    return sheet
+    total = len(pages)
+    for page, (sheet, _instances) in enumerate(pages, 1):
+        for note in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote).ToElements():
+            if (note.Text.startswith(name + u"\r") or note.Text.startswith(name + u"\n")
+                    or note.Text.startswith(u"최종 합계 (건물 전체 순비용)")):
+                doc.Delete(note.Id)
+        grid = SheetGrid(DB, doc, sheet, "ReClaim Method")
+        title = name if total == 1 else u"{} ({}/{})".format(name, page, total)
+        grid.row(left, right, top + 0.49, [(right, title, 10, True)], 0.11)
+        grid.row(left, right, top + 0.38, [(left + 0.32, u"대상 IFC", 5, True),
+                                           (right, data["source"], 6, False)])
+        grid.row(left, right, top + 0.28, [(middle, u"건물 전체 처리비", 5, True),
+                                           (right, u"건물 전체 매각수익", 5, True)], 0.08)
+        grid.row(left, right, top + 0.20, [(middle, amounts[0], 9, True),
+                                           (right, amounts[1], 9, True)])
+        grid.row(left, right, top + 0.10, [(right, scope, 5.5, False)])
+        bottom = frame["schedule_floor"] - GAP
+        if page == total:
+            grid.row(left, right, bottom, [(middle, u"최종 합계 · 건물 전체 순비용", 7, True),
+                                           (right, u"{:,}원".format(net), 10, True)], 0.12)
+        else:
+            grid.row(left, right, bottom, [(right, u"다음 장에 계속 ({}/{})".format(page + 1, total), 6, False)], 0.12)
+        draw_sheet_border(DB, doc, sheet, data, frame)
+    return pages[0][0]
 
 
 def place_cost_chart(DB, doc, sheet, payload):
@@ -598,7 +661,7 @@ def place_sheet_image(DB, doc, sheet, content, prefix, extension, point, width):
             os.remove(path)
 
 
-def draw_sheet_border(DB, doc, sheet, data):
+def draw_sheet_border(DB, doc, sheet, data, frame=None):
     name = "ReClaim Sheet Border"
     lines = doc.Settings.Categories.get_Item(DB.BuiltInCategory.OST_Lines)
     category = next((item for item in lines.SubCategories if item.Name == name), None)
@@ -625,37 +688,42 @@ def draw_sheet_border(DB, doc, sheet, data):
             doc.Delete(note.Id)
 
     doc.Regenerate()
-    boxes = []
-    for element_type in (DB.TextNote, DB.Viewport, DB.ImageInstance, DB.ScheduleSheetInstance, DB.CurveElement):
-        for element in DB.FilteredElementCollector(doc, sheet.Id).OfClass(element_type):
-            if element.OwnerViewId != sheet.Id:
-                continue
-            if isinstance(element, DB.ImageInstance) and DB.Element.Name.GetValue(doc.GetElement(element.GetTypeId())).startswith("ReClaim_TitleLogo_"):
-                continue
-            box = element.get_BoundingBox(sheet)
-            if box is not None:
-                boxes.append(box)
-    if not boxes:
-        return
     from System import DateTime
-    margin = 0.045
-    left = min(box.Min.X for box in boxes) - margin
-    right = max(box.Max.X for box in boxes) + margin
-    top = max(box.Max.Y for box in boxes) + margin
-    band_top = min(box.Min.Y for box in boxes) - margin
-    portrait = sheet.SheetNumber == "RC-01" or sheet.SheetNumber.startswith("RC-01-")
-    ratio = 594.0 / 841.0 if portrait else 841.0 / 594.0
-    bottom = band_top - 0.28
-    width, height = right - left, top - bottom
-    if width < height * ratio:
-        extra = (height * ratio - width) / 2
-        left -= extra
-        right += extra
+    if frame is not None:
+        left, right, top, bottom = frame["left"], frame["right"], frame["top"], frame["bottom"]
+        band_top = bottom + TITLE_BAND
     else:
-        extra = width / ratio - height
-        top += extra / 2
-        band_top -= extra / 2
-        bottom -= extra / 2
+        boxes = []
+        for element_type in (DB.TextNote, DB.Viewport, DB.ImageInstance, DB.ScheduleSheetInstance, DB.CurveElement):
+            for element in DB.FilteredElementCollector(doc, sheet.Id).OfClass(element_type):
+                if element.OwnerViewId != sheet.Id:
+                    continue
+                if isinstance(element, DB.ImageInstance) and DB.Element.Name.GetValue(doc.GetElement(element.GetTypeId())).startswith("ReClaim_TitleLogo_"):
+                    continue
+                box = element.get_BoundingBox(sheet)
+                if box is not None:
+                    boxes.append(box)
+        if not boxes:
+            return
+        margin = 0.045
+        left = min(box.Min.X for box in boxes) - margin
+        right = max(box.Max.X for box in boxes) + margin
+        top = max(box.Max.Y for box in boxes) + margin
+        band_top = min(box.Min.Y for box in boxes) - margin
+    portrait = sheet.SheetNumber == "RC-01" or sheet.SheetNumber.startswith("RC-01-")
+    if frame is None:
+        ratio = 594.0 / 841.0 if portrait else 841.0 / 594.0
+        bottom = band_top - TITLE_BAND
+        width, height = right - left, top - bottom
+        if width < height * ratio:
+            extra = (height * ratio - width) / 2
+            left -= extra
+            right += extra
+        else:
+            extra = width / ratio - height
+            top += extra / 2
+            band_top -= extra / 2
+            bottom -= extra / 2
 
     def rule(x1, y1, x2, y2):
         line = DB.Line.CreateBound(DB.XYZ(x1, y1, 0), DB.XYZ(x2, y2, 0))
@@ -677,19 +745,34 @@ def draw_sheet_border(DB, doc, sheet, data):
     heading = u"경제성 비교" if portrait else u"전면 분별" if sheet.SheetNumber.startswith("RC-02") else u"일괄 압쇄"
     source = os.path.splitext(os.path.basename(data.get("source") or ""))[0] or doc.Title
     split = band_top - 0.18
-    rule(left, split, code_start, split)
-    rule(project_end, band_top - 0.08, code_start, band_top - 0.08)
+    label_bottom = band_top - 0.08
+    rule(left, split, logo_end, split)
+    rule(project_end, split, code_start, split)
+    rule(project_end, label_bottom, code_start, label_bottom)
     def entry(x, end, y, value, size, bold=False):
-        block.text(x + 0.014, y - 0.012, value, size, bold, end - x - 0.028)
+        return block.text(x + 0.014, y - 0.012, value, size, bold, end - x - 0.028)
     place_sheet_image(DB, doc, sheet, base64.b64decode(TITLE_BLOCK_LOGO), "ReClaim_TitleLogo_", ".jpg",
                       DB.XYZ((left + logo_end) / 2, band_top - 0.09, 0), 0.18)
     entry(left, logo_end, split, u"https://mungim5556-ui.github.io/reclaim-compare/", 4)
     entry(logo_end, project_end, band_top, u"프로젝트 이름", 5)
-    entry(logo_end, project_end, split, source, 6, True)
+    name_note = entry(logo_end, project_end, band_top - 0.06, source, 8, True)
+    center_note(DB, doc, sheet, name_note, (logo_end + project_end) / 2, (band_top - 0.05 + bottom) / 2)
     entry(project_end, code_start, band_top, heading, 7, True)
-    entry(project_end, code_start, band_top - 0.08, u"생성 일시 (KST)", 4.5)
-    entry(project_end, code_start, split, DateTime.UtcNow.AddHours(9).ToString("yyyy-MM-dd HH:mm:ss"), 5)
+    entry(project_end, code_start, label_bottom,
+          u"생성 일시 (KST)  " + DateTime.UtcNow.AddHours(9).ToString("yyyy-MM-dd HH:mm:ss"), 5)
+    entry(project_end, code_start, split, u"소유자", 5)
     entry(code_start, right, band_top - 0.075, sheet.SheetNumber, 9, True)
+
+
+def center_note(DB, doc, sheet, note, x, y):
+    """글상자 안에서 가운데 정렬하고, 상자 중심을 (x, y)에 맞춘다."""
+    note.HorizontalAlignment = DB.HorizontalTextAlignment.Center
+    doc.Regenerate()
+    box = note.get_BoundingBox(sheet)
+    if box is None:
+        return
+    offset = DB.XYZ(x - (box.Min.X + box.Max.X) / 2, y - (box.Min.Y + box.Max.Y) / 2, 0)
+    DB.ElementTransformUtils.MoveElement(doc, note.Id, offset)
 
 
 def draw_comparison_layout(DB, doc, sheet, data, done, missing):
@@ -953,6 +1036,13 @@ if __name__ == "__main__":
         assert u"-2,000 원" in sheet_text(data, 8, 1)
         assert u"8개 기록 / 1개" in sheet_text(data, 8, 1)
         assert u"판정 보류" in sheet_text(dict(data, recommended=None), 8, 1)
-        print("self-check ok: CSV parsing and comparison labels")
+        frame = method_frame()
+        assert plan_pages(0.5, 1.19) == (1, 1, 1)                      # 한 열에 들어가면 나누지 않는다
+        segments, columns, pages = plan_pages(frame["height"] * 1.5, 1.19)
+        assert (columns, pages) == (2, 1) and segments == 2             # 좌우 두 열, 한 장
+        segments, columns, pages = plan_pages(frame["height"] * 5, 1.19)
+        assert pages > 1 and segments == pages * columns               # 넘치면 장을 늘리고 열 높이를 고르게
+        assert page_numbers("RC-02", 2) == [u"RC-02(1/2)", u"RC-02(2/2)"] and page_numbers("RC-02", 1) == ["RC-02"]
+        print("self-check ok: CSV parsing, comparison labels and sheet paging")
     else:
         run_in_revit()
