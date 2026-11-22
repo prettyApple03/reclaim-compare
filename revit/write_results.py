@@ -8,7 +8,7 @@ import io
 import json
 import os
 from collections import Counter
-from math import ceil
+from math import ceil, isinf, isnan
 from uuid import uuid4
 
 TEXT = ("RC_Waste", "RC_Method")
@@ -43,6 +43,24 @@ def read_rows(path):
             r[k] = float(r[k])
         rows.append(r)
     return rows
+
+
+def read_revit_export(path):
+    payload = json.loads(read_export_text(path))
+    if not isinstance(payload, dict) or payload.get("schema") != "reclaim-revit-v1":
+        raise ValueError("Invalid ReClaim export schema")
+    summary, rows = payload["summary"], payload["elements"]
+    if not isinstance(rows, list) or not rows or not summary["source"]:
+        raise ValueError("Missing ReClaim model or element results")
+    for row in rows:
+        if not all(isinstance(row[key], type(u"")) for key in ("ElementId", "Category") + TEXT):
+            raise ValueError("Invalid ReClaim element fields")
+        for key in NUMBER:
+            value = float(row[key])
+            if isinf(value) or isnan(value):
+                raise ValueError("Invalid ReClaim numeric value")
+            row[key] = value
+    return summary, rows
 
 
 def summary_text(s):
@@ -251,18 +269,19 @@ def run_in_revit():
     from System import Int64
 
     doc, app, out = revit.doc, revit.doc.Application, script.get_output()
-    csv_path = forms.pick_file(file_ext="csv", title="reclaim_elements.csv 고르기")
-    if not csv_path:
+    path = forms.pick_file(file_ext="json", title=u"사이트에서 받은 .reclaim.json 선택")
+    if not path:
         return
-    rows = read_rows(csv_path)
-    json_path = os.path.join(os.path.dirname(csv_path), "reclaim_summary.json")
-    data = None
-    if os.path.isfile(json_path):
-        data = json.loads(read_export_text(json_path))
+    try:
+        data, rows = read_revit_export(path)
         project_summary = summary_text(data)
-    elif any(v.Name == SHEET_NAME and v.SheetNumber.startswith(SHEET_NUMBER)
-             for v in DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet)):
-        raise ValueError(u"기존 비교 시트를 갱신하려면 CSV와 같은 폴더에 reclaim_summary.json을 두세요.")
+    except (IOError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
+        forms.alert(u"ReClaim 사이트에서 ‘Revit용 결과 다운로드’로 받은 파일을 선택하세요.")
+        return
+    if not forms.alert(
+            u"분석 대상: {}\n열린 Revit 모델: {}\n\n이 모델에 결과를 적용하시겠습니까?".format(
+                data["source"], doc.Title), yes=True, no=True):
+        return
     run_id = uuid4().hex
 
     # 공유 매개변수를 모델 범주 전체와 프로젝트 정보에 인스턴스 매개변수로 연결
@@ -303,7 +322,7 @@ def run_in_revit():
 
             done = 0
             failures = Counter()
-            keys = TEXT + NUMBER + ((RUN_PARAMETER,) if data is not None else ())
+            keys = TEXT + NUMBER + (RUN_PARAMETER,)
             for r in rows:
                 if r.get("Category") == "adjustment":
                     continue
@@ -323,22 +342,18 @@ def run_in_revit():
                 done += 1
 
             missing = sum(failures.values())
-            if data is not None:
-                if not done:
-                    raise ValueError(u"현재 모델과 일치하는 부재가 없습니다. 이 모델에서 내보낸 IFC의 CSV를 선택하세요.")
-                doc.ProjectInformation.get_Parameter(definitions["RC_Summary"].GUID).Set(project_summary)
-                parameter_ids = {k: DB.SharedParameterElement.Lookup(doc, definitions[k].GUID).Id for k in keys}
-                sheet = make_comparison_sheet(DB, doc, data, parameter_ids, run_id, done, missing)
+            if not done:
+                raise ValueError(u"현재 모델과 일치하는 부재가 없습니다. 현재 모델과 같은 IFC에서 분석한 ReClaim 결과를 선택하세요.")
+            doc.ProjectInformation.get_Parameter(definitions["RC_Summary"].GUID).Set(project_summary)
+            parameter_ids = {k: DB.SharedParameterElement.Lookup(doc, definitions[k].GUID).Id for k in keys}
+            sheet = make_comparison_sheet(DB, doc, data, parameter_ids, run_id, done, missing)
     finally:
         app.SharedParametersFilename = old
     out.print_md(u"**{}개 부재에 기록했습니다.** 매칭 또는 기록 실패: {}개".format(done, missing))
     for (reason, category), count in sorted(failures.items()):
         out.print_md(u"- {} · {}: {}개".format(reason, category, count))
-    if sheet is not None:
-        out.print_md(u"**시트 {} — {}** · 프로젝트 탐색기의 시트에서 확인하세요.".format(sheet.SheetNumber, sheet.Name))
-        revit.uidoc.RequestViewChange(sheet)
-    else:
-        out.print_md(u"비교 시트 생성에는 CSV와 같은 폴더의 `reclaim_summary.json`이 필요합니다.")
+    out.print_md(u"**시트 {} — {}** · 프로젝트 탐색기의 시트에서 확인하세요.".format(sheet.SheetNumber, sheet.Name))
+    revit.uidoc.RequestViewChange(sheet)
 
 
 if __name__ == "__main__":
