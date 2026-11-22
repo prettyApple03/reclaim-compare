@@ -73,3 +73,5 @@
 .rp-schedule .r { text-align: right; }
 .rp-schedule-title { font-size: calc(var(--rp-font) * 1.15); }
 .rp-total { flex: none; }
+.rp-total td { vertical-align: middle; }
+.rp-hint { font-size: 3.6mm; font-weight: 400; color: #444; }

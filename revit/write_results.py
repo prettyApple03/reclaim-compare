@@ -19,6 +19,7 @@ RUN_PARAMETER = "RC_ResultRun"
 CRUSH_METHOD = "RC_CrushMethod"
 CRUSH_DISPOSAL = "RC_CrushDisposalCost"
 CRUSH_REVENUE = "RC_CrushRevenue"
+CRUSH_NUMBER = (CRUSH_DISPOSAL, CRUSH_REVENUE)
 SHEET_NUMBER = "RC-01"
 SHEET_NAME = u"해체 경제성 비교"
 VIEW_NAME = u"ReClaim - 해체 대상 3D"
@@ -66,13 +67,17 @@ def read_revit_export(path):
     for row in rows:
         if not all(isinstance(row[key], TEXT_TYPE) for key in ("ElementId", "Category") + TEXT):
             raise ValueError("Invalid ReClaim element fields")
-        for key in NUMBER:
+        for key in NUMBER + CRUSH_NUMBER:
+            if key not in row:
+                continue   # 이전 버전 결과 파일에는 압쇄 부재별 금액이 없다
             value = float(row[key])
             if isinf(value) or isnan(value):
                 raise ValueError("Invalid ReClaim numeric value")
             row[key] = value
     summary = dict(summary, scenario_costs=payload.get("scenario_costs", {}),
-                   cost_chart_png=payload.get("cost_chart_png"))
+                   cost_chart_png=payload.get("cost_chart_png"),
+                   unattributed=payload.get("unattributed"),
+                   crush_amounts=all(CRUSH_DISPOSAL in r for r in rows if r.get("Category") != "adjustment"))
     return summary, rows
 
 
@@ -536,9 +541,19 @@ def make_method_sheet(DB, doc, number, name, schedule, data, costs):
     grid.row(left, right, top + 0.20, [(middle, amounts[0], 9, True),
                                        (right, amounts[1], 9, True)])
     scope = (u"전면 분별 시나리오에서도 콘크리트 구조체 등은 압쇄 처리할 수 있습니다."
-             if number == "RC-02" else u"처리비와 매각수익은 건물 전체 집계입니다.")
+             if number == "RC-02" else u"일괄 압쇄는 선철거 없이 모든 부재를 구조체와 함께 압쇄 해체합니다.")
     grid.row(left, right, top + 0.10, [(right, scope, 5.5, False)])
     net = data["selective_total_won" if number == "RC-02" else "crush_total_won"]
+    # 표 아래로 차례로 쌓는다: (미산정 안내) → (부재 미귀속) → 최종 합계
+    if number == "RC-03" and not data.get("crush_amounts"):
+        grid.row(left, right, bottom, [(right, u"부재별 처리비·매각수익: 미산정 (사이트에서 결과 파일을 다시 받으면 채워집니다)", 5.5, False)])
+        bottom -= 0.10
+    unattributed = (data.get("unattributed") or {}).get("selective" if number == "RC-02" else "crush")
+    if unattributed:
+        grid.row(left, right, bottom, [(middle, u"부재 미귀속 처리비 · 매각수익 (부재별 소계 + 미귀속 = 건물 전체)", 5, True),
+                                       (right, u"처리비 {:,}원 · 매각수익 {:,}원".format(
+                                           int(unattributed["disposal"]), int(unattributed["revenue"])), 6, False)])
+        bottom -= 0.10
     grid.row(left, right, bottom, [(middle, u"최종 합계 · 건물 전체 순비용", 7, True),
                                    (right, u"{:,}원".format(net), 10, True)], 0.12)
     draw_sheet_border(DB, doc, sheet, data)
@@ -898,12 +913,16 @@ def run_in_revit():
                     continue
                 params = {k: el.get_Parameter(definitions[k].GUID) for k in keys}
                 crush_method = el.get_Parameter(definitions[CRUSH_METHOD].GUID)
-                if any(p is None or p.IsReadOnly for p in list(params.values()) + [crush_method]):
+                crush_amounts = {k: el.get_Parameter(definitions[k].GUID) for k in CRUSH_NUMBER}
+                if any(p is None or p.IsReadOnly for p in list(params.values()) + [crush_method] + list(crush_amounts.values())):
                     failures[(u"기록 가능한 매개변수 없음", el.Category.Name if el.Category else r["Category"])] += 1
                     continue
                 for k in keys:
                     params[k].Set(run_id if k == RUN_PARAMETER else r[k])
-                crush_method.Set(u"제외" if r["RC_Method"] == u"제외" else u"압쇄")
+                crush_method.Set(r.get(CRUSH_METHOD) or (u"제외" if r["RC_Method"] == u"제외" else u"압쇄 해체"))
+                for k, parameter in crush_amounts.items():
+                    if k in r:
+                        parameter.Set(r[k])
                 done += 1
 
             missing = sum(failures.values())
@@ -944,9 +963,9 @@ if __name__ == "__main__":
             p = os.path.join(d, "t.csv")
             with io.open(p, "w", encoding="utf-8-sig") as f:
                 f.write(u"GlobalId,ElementId,Category,Floor,RC_Waste,RC_Method,RC_Tons,RC_DisposalCost,RC_Revenue\n"
-                        u"0abc,300014,window,1,glass,분별,0.1080,5890,60750\n")
+                        u"0abc,300014,window,1,glass,분별 해체,0.1080,5890,60750\n")
             r = read_rows(p)
-            assert len(r) == 1 and r[0]["ElementId"] == "300014" and r[0]["RC_Method"] == u"분별" and r[0]["RC_Tons"] == 0.108
+            assert len(r) == 1 and r[0]["ElementId"] == "300014" and r[0]["RC_Method"] == u"분별 해체" and r[0]["RC_Tons"] == 0.108
         data = json.loads('{"crush_total_won": 10000, "selective_total_won": 8000, "delta_won": -2000, "p_selective_cheaper": 0.25, "recommended": "selective"}')
         assert u"25.0%" in summary_text(data)
         assert u"-2,000 원" in sheet_text(data, 8, 1)

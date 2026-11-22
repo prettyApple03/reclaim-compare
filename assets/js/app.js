@@ -2,9 +2,9 @@
 import { selectiveEquipmentHoursPerDay, costScenario, concreteCut, officeSalvage, steelDismantling, compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES, concreteGrades, concreteGradeLink, streamTons, PRESS_FINISH_BASELINE } from "./scenario.js?v=ifc-equipment-days-1";
 import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validationCases, comparableCases, calibrateStructure, benchmark } from "./calibration.js";
 import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js?v=ifc-equipment-days-1";
-import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=ifc-finish-flow-1";
+import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=crush-elements-1";
 import { COST_PARTS, REVENUE_COLOR, stackedBars, tornadoChart, histChart, legend, mil, num } from "./charts.js";
-import { reportHtml, kstStamp, fitSchedules } from "./report.js?v=sheets-1";
+import { reportHtml, kstStamp, fitSchedules } from "./report.js?v=crush-elements-1";
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -1092,9 +1092,9 @@ function summary(d) {
     structure_calibration_factor: d.q.structureFactor ?? null, unpriced_disposal: { crush: crush.unpricedDisposal, selective: selective.unpricedDisposal }, recommended: d.recommended, basis: d.basis };
 }
 
-function exportElementRows(d) {
-  const result = d.cmp.selective;
-  const rows = elementResults(d.classified, state.p, result.mixed.fee, d.q);
+function exportElementRows(d, mode = "selective") {
+  const result = d.cmp[mode];
+  const rows = elementResults(d.classified, state.p, result.mixed.fee, d.q, mode);
   const appliedTons = Object.values(streamTons(d.q, state.p).t).reduce((sum, weight) => sum + weight, 0);
   return reconcileElementResults([...rows, ...d.frameAdjustments], appliedTons, result);
 }
@@ -1167,22 +1167,32 @@ async function revitCostChart(d) {
   }
 }
 
+// 부재에 연결할 수 없는 보정분 (원단위 보충, 수동 보정, 합계 정산). 부재별 소계 + 미귀속분 = 건물 전체.
+function unattributedCosts(d) {
+  return Object.fromEntries(["selective", "crush"].map((mode) => {
+    const rows = exportElementRows(d, mode).filter((r) => r.category === "adjustment");
+    return [mode, { disposal: Math.round(rows.reduce((s, r) => s + r.disposal, 0)), revenue: Math.round(rows.reduce((s, r) => s + r.revenue, 0)) }];
+  }));
+}
+
 // 보고서 인쇄: Revit RC-01~03과 같은 구성의 시트를 만들어 인쇄 창을 연다.
 async function printReport(d) {
   const byGlobalId = new Map(d.classified.map((e) => [e.globalId, e]));
-  const elements = state.source === "ifc" ? exportElementRows(d).map((r) => ({
+  const named = (rows) => rows.filter((r) => r.category !== "adjustment").map((r) => ({
     ...r,
     categoryLabel: CATEGORY_LABEL[r.category] ?? r.category,
     typeName: byGlobalId.get(r.globalId)?.name ?? "",
     streamLabel: STREAM_LABEL[r.stream] ?? r.stream,
-  })) : [];
+  }));
+  const elements = state.source === "ifc" ? named(exportElementRows(d)) : [];
+  const crushElements = state.source === "ifc" ? named(exportElementRows(d, "crush")) : [];
   const [chartPng, modelPng] = await Promise.all([
     revitCostChart(d).catch(() => null),
     modelSnapshot(d).catch(() => null),
   ]);
   const report = $("#print-report") ?? document.body.appendChild(Object.assign(document.createElement("div"), { id: "print-report" }));
   report.innerHTML = reportHtml({
-    summary: summary(d), elements, chartPng, modelPng,
+    summary: summary(d), elements, crushElements, unattributed: state.source === "ifc" ? unattributedCosts(d) : null, chartPng, modelPng,
     costs: Object.fromEntries(["selective", "crush"].map((key) => [key, { disposal: d.cmp[key].disposal, revenue: d.cmp[key].revenue }])),
     logo: "assets/img/title-logo.jpg", url: location.origin + location.pathname, stamp: kstStamp(),
   });
@@ -1273,19 +1283,25 @@ document.addEventListener("click", async (e) => {
   if (act === "revit" && state.source === "ifc") {
     const projectSummary = summary(d);
     const name = (state.fileName || "reclaim").replace(/\.ifc$/i, "").replace(/[<>:"/\\|?*]/g, "_");
-    const elements = exportElementRows(d).map(r => ({
-      GlobalId: r.globalId,
-      ElementId: String(r.tag ?? ""),
-      Category: r.category,
-      RC_Waste: r.stream,
-      RC_Method: r.method,
-      RC_Tons: +r.tons.toFixed(4),
-      RC_DisposalCost: Math.round(r.disposal),
-      RC_Revenue: Math.round(r.revenue),
-    }));
+    const crushRows = exportElementRows(d, "crush");
+    const elements = exportElementRows(d).map((r, index) => {
+      const crush = r.category === "adjustment" ? null : crushRows[index];
+      return {
+        GlobalId: r.globalId,
+        ElementId: String(r.tag ?? ""),
+        Category: r.category,
+        RC_Waste: r.stream,
+        RC_Method: r.method,
+        RC_Tons: +r.tons.toFixed(4),
+        RC_DisposalCost: Math.round(r.disposal),
+        RC_Revenue: Math.round(r.revenue),
+        ...(crush ? { RC_CrushMethod: crush.method, RC_CrushDisposalCost: Math.round(crush.disposal), RC_CrushRevenue: Math.round(crush.revenue) } : {}),
+      };
+    });
     const costChart = await revitCostChart(d).catch(() => null);
     return download(name + ".reclaim.json", JSON.stringify({
       schema: "reclaim-revit-v1", summary: projectSummary, elements, cost_chart_png: costChart,
+      unattributed: unattributedCosts(d),
       scenario_costs: Object.fromEntries(["selective", "crush"].map(key => [key, {
         disposal: Math.round(d.cmp[key].disposal),
         revenue: Math.round(d.cmp[key].revenue),

@@ -88,7 +88,7 @@ function rc01(ctx) {
   </section>`;
 }
 
-function methodSheet(ctx, { number, name, heading, rows, costs, net, scope, fields }) {
+function methodSheet(ctx, { number, name, heading, rows, costs, net, scope, fields, unattributed }) {
   const page = SHEET.landscape;
   const columns = columnCount(rows.length);
   const parts = splitColumns(rows, columns);
@@ -114,7 +114,10 @@ function methodSheet(ctx, { number, name, heading, rows, costs, net, scope, fiel
         <div class="rp-columns" style="--rp-cols:${columns};--rp-row:${size.row.toFixed(2)}mm;--rp-font:${size.font.toFixed(2)}mm">
           ${parts.map(table).join("")}
         </div>
-        <table class="rp-grid rp-total"><tr><td class="rp-k">최종 합계 · 건물 전체 순비용</td><td class="rp-big">${won(net)}</td></tr></table>
+        <table class="rp-grid rp-total">
+          ${unattributed ? `<tr><td class="rp-k">부재 미귀속 처리비 · 매각수익<br><span class="rp-hint">원단위 보충·수동 보정 등 부재에 연결할 수 없는 금액. 부재별 소계 + 미귀속 = 건물 전체</span></td><td>처리비 ${won(unattributed.disposal)} · 매각수익 ${won(unattributed.revenue)}</td></tr>` : ""}
+          <tr><td class="rp-k">최종 합계 · 건물 전체 순비용</td><td class="rp-big">${won(net)}</td></tr>
+        </table>
       </div>
       ${titleBlock({ ...ctx, source: ctx.summary.source, number, heading })}
     </div>
@@ -123,41 +126,39 @@ function methodSheet(ctx, { number, name, heading, rows, costs, net, scope, fiel
 
 const WASTE_ORDER = ["concrete", "masonry", "metal", "wood", "resin", "glass", "tile", "board", "panel", "mixed", "copper", "aluminum", "excluded"];
 
-// Revit 일람표와 같이 성상 → 처리 방식 순으로 정렬한다.
-export function scheduleRows(elements, crush = false) {
+// Revit 일람표와 같이 성상 → 처리 방식 순으로 정렬한다. 금액이 없으면 '미산정'으로 표시한다.
+export function scheduleRows(elements) {
   const order = (stream) => { const i = WASTE_ORDER.indexOf(stream); return i < 0 ? WASTE_ORDER.length : i; };
+  const amount = (v) => (v == null || Number.isNaN(Number(v)) ? "미산정" : Math.round(v).toLocaleString("ko-KR"));
   return elements
     .filter((r) => r.category !== "adjustment")
-    .map((r) => {
-      const method = crush ? (r.method === "제외" ? "제외" : "압쇄") : r.method;
-      return { ...r, method, tonsText: tons(r.tons),
-        disposalText: crush ? "" : Math.round(r.disposal).toLocaleString("ko-KR"),
-        revenueText: crush ? "" : Math.round(r.revenue).toLocaleString("ko-KR") };
-    })
+    .map((r) => ({ ...r, tonsText: tons(r.tons), disposalText: amount(r.disposal), revenueText: amount(r.revenue) }))
     .sort((a, b) => order(a.stream) - order(b.stream) || String(a.method).localeCompare(String(b.method), "ko")
       || String(a.typeName).localeCompare(String(b.typeName), "ko"));
 }
 
-// ctx: { summary, elements:[{category,categoryLabel,typeName,stream,streamLabel,method,tons,disposal,revenue}],
+// ctx: { summary, elements / crushElements:[{category,categoryLabel,typeName,stream,streamLabel,method,tons,disposal,revenue}],
+//        unattributed:{selective:{disposal,revenue},crush:{...}},
 //        costs:{selective:{disposal,revenue},crush:{...}}, chartPng, modelPng, logo, url, stamp }
 export function reportHtml(ctx) {
   const sheets = [rc01(ctx)];
   if (ctx.elements.length) {
     const label = (rows) => rows.map((r) => ({ ...r, waste: r.streamLabel ?? r.stream }));
         // [제목, 값, 오른쪽 정렬, Revit 열 너비 비율]
-    const common = [["범주", "categoryLabel", false, 13], ["패밀리 및 유형", "typeName", false, 32], ["폐기물 성상", "waste", false, 14],
-      ["부재 처리 방식", "method", false, 15], ["중량(t)", "tonsText", true, 13]];
+    const fields = [["범주", "categoryLabel", false, 13], ["패밀리 및 유형", "typeName", false, 32], ["폐기물 성상", "waste", false, 14],
+      ["부재 처리 방식", "method", false, 15], ["중량(t)", "tonsText", true, 13],
+      ["처리비(원)", "disposalText", true, 16], ["매각수익(원)", "revenueText", true, 16]];
     sheets.push(methodSheet(ctx, {
       number: "RC-02", name: "전면 분별 · 부재별 해체 결과", heading: "전면 분별",
       rows: label(scheduleRows(ctx.elements)), costs: ctx.costs?.selective, net: ctx.summary.selective_total_won,
       scope: "전면 분별 시나리오에서도 콘크리트 구조체 등은 압쇄 처리할 수 있습니다.",
-      fields: [...common, ["처리비(원)", "disposalText", true, 16], ["매각수익(원)", "revenueText", true, 16]],
+      fields, unattributed: ctx.unattributed?.selective,
     }));
     sheets.push(methodSheet(ctx, {
       number: "RC-03", name: "일괄 압쇄 · 부재별 처리 및 중량", heading: "일괄 압쇄",
-      rows: label(scheduleRows(ctx.elements, true)), costs: ctx.costs?.crush, net: ctx.summary.crush_total_won,
-      scope: "처리비와 매각수익은 건물 전체 집계입니다.",
-      fields: common,
+      rows: label(scheduleRows(ctx.crushElements ?? [])), costs: ctx.costs?.crush, net: ctx.summary.crush_total_won,
+      scope: "일괄 압쇄는 선철거 없이 모든 부재를 구조체와 함께 압쇄 해체합니다.",
+      fields, unattributed: ctx.unattributed?.crush,
     }));
   }
   return sheets.join("");
