@@ -238,6 +238,7 @@ def make_method_sheet(DB, doc, number, name, schedule, data, costs):
     formatted = footer.GetFormattedText()
     formatted.SetBoldStatus(DB.TextRange(0, len(footer_text)), True)
     footer.SetFormattedText(formatted)
+    draw_sheet_border(DB, doc, sheet)
     return sheet
 
 
@@ -267,6 +268,42 @@ def place_cost_chart(DB, doc, sheet, payload):
     finally:
         if os.path.isfile(path):
             os.remove(path)
+
+
+def draw_sheet_border(DB, doc, sheet):
+    name = "ReClaim Sheet Border"
+    lines = doc.Settings.Categories.get_Item(DB.BuiltInCategory.OST_Lines)
+    category = next((item for item in lines.SubCategories if item.Name == name), None)
+    if category is None:
+        category = doc.Settings.Categories.NewSubcategory(lines, name)
+        category.SetLineWeight(4, DB.GraphicsStyleType.Projection)
+    style = category.GetGraphicsStyle(DB.GraphicsStyleType.Projection)
+    curves = DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.CurveElement)
+    old_ids = [curve.Id for curve in curves
+               if curve.LineStyle is not None and curve.LineStyle.Id == style.Id]
+    for element_id in old_ids:
+        doc.Delete(element_id)
+
+    doc.Regenerate()
+    boxes = []
+    for element_type in (DB.TextNote, DB.Viewport, DB.ImageInstance, DB.ScheduleSheetInstance, DB.CurveElement):
+        for element in DB.FilteredElementCollector(doc, sheet.Id).OfClass(element_type):
+            if element.OwnerViewId != sheet.Id:
+                continue
+            box = element.get_BoundingBox(sheet)
+            if box is not None:
+                boxes.append(box)
+    if not boxes:
+        return
+    margin = 0.075
+    left = min(box.Min.X for box in boxes) - margin
+    right = max(box.Max.X for box in boxes) + margin
+    bottom = min(box.Min.Y for box in boxes) - margin
+    top = max(box.Max.Y for box in boxes) + margin
+    corners = [(left, bottom), (right, bottom), (right, top), (left, top)]
+    for (x1, y1), (x2, y2) in zip(corners, corners[1:] + corners[:1]):
+        line = DB.Line.CreateBound(DB.XYZ(x1, y1, 0), DB.XYZ(x2, y2, 0))
+        doc.Create.NewDetailCurve(sheet, line).LineStyle = style
 
 
 def draw_comparison_layout(DB, doc, sheet, data, done, missing):
@@ -486,6 +523,7 @@ def run_in_revit():
             parameter_ids = {k: DB.SharedParameterElement.Lookup(doc, definitions[k].GUID).Id for k in keys}
             sheet = make_comparison_sheet(DB, doc, data, parameter_ids, run_id, done, missing)
             place_cost_chart(DB, doc, sheet, data.get("cost_chart_png"))
+            draw_sheet_border(DB, doc, sheet)
             selective = make_schedule(DB, doc, DETAIL_NAME, parameter_ids, run_id, grouped=False)
             crush_ids = {key: parameter_ids[key] for key in ("RC_Waste", "RC_Tons", RUN_PARAMETER)}
             for column, key in (("RC_Method", CRUSH_METHOD), ("RC_DisposalCost", CRUSH_DISPOSAL),
