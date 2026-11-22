@@ -399,103 +399,44 @@ TITLE_BLOCK_LOGO = (
 )
 
 
-# A1 가로(841 x 594 mm) 한 장에 표를 실제 글자 크기로 배치한다. 단위는 ft.
-PAGE_WIDTH = 841.0 / 304.8
-PAGE_HEIGHT = 594.0 / 304.8
-FRAME_INSET = 0.07        # 종이 가장자리에서 테두리까지
-TITLE_BAND = 0.28         # 하단 표제란 높이
-INNER = 0.06              # 테두리 안쪽 여백
-HEADER = 0.49             # 표 위 요약 칸 높이
-TOTAL_ROW = 0.12          # 표 아래 합계 칸 높이
+TITLE_BAND = 0.28         # 하단 표제란 높이 (ft)
 GAP = 0.025
-COLUMN_GAP = 0.08
-SEGMENT_OVERHEAD = 0.10   # 나눈 표마다 반복되는 제목·머리글 높이
+COLUMN_GAP = 0.14
+COLUMN_HEIGHT = 1.35      # 이보다 길면 옆 열로 넘긴다
 MAX_COLUMNS = 4
+ORIGIN = (0.09, 0.99)     # 첫 열의 왼쪽 위
 
 
-def method_frame():
-    left, bottom = FRAME_INSET, FRAME_INSET
-    right, top = PAGE_WIDTH - FRAME_INSET, PAGE_HEIGHT - FRAME_INSET
-    content_left, content_right = left + INNER, right - INNER
-    schedule_top = top - INNER - HEADER - GAP
-    schedule_floor = bottom + TITLE_BAND + INNER + TOTAL_ROW + GAP
-    return {"left": left, "right": right, "top": top, "bottom": bottom,
-            "content_left": content_left, "content_right": content_right,
-            "schedule_top": schedule_top, "schedule_floor": schedule_floor,
-            "height": schedule_top - schedule_floor, "width": content_right - content_left}
+def column_count(total_height):
+    """표 높이 → 세로 열 수 (1~4). 각 열은 위아래로 끊지 않고 한 줄로 이어진다."""
+    return max(1, min(MAX_COLUMNS, int(ceil(total_height / COLUMN_HEIGHT))))
 
 
-def plan_pages(total_height, column_width, extra_segments=0):
-    """표 전체 높이와 한 열 너비 → (나눌 조각 수, 한 장의 열 수, 장 수).
-    같은 열에서는 위아래로 나누지 않고, 좌우 열로만 나눈다. 넘치면 장을 늘린다."""
-    frame = method_frame()
-    columns = int((frame["width"] + COLUMN_GAP) // (column_width + COLUMN_GAP))
-    columns = max(1, min(MAX_COLUMNS, columns))
-    if total_height <= frame["height"] and not extra_segments:
-        return 1, 1, 1
-    per_column = frame["height"] - SEGMENT_OVERHEAD
-    segments = max(2, int(ceil(total_height / per_column))) + extra_segments
-    pages = int(ceil(segments / float(columns)))
-    if pages > 1:
-        segments = pages * columns   # 여러 장이면 열 높이를 고르게 맞춘다
-    return segments, min(columns, segments), pages
-
-
-def page_numbers(number, pages):
-    if pages == 1:
-        return [number]
-    return [u"{}({}/{})".format(number, page, pages) for page in range(1, pages + 1)]
-
-
-def method_pages(DB, doc, number, name, pages):
-    """RC-02, RC-02(1/2) 처럼 이 스크립트가 만든 시트를 장 수에 맞춰 만들고 남는 장은 지운다."""
-    all_sheets = list(DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet))
-    def ours(sheet):
-        n = sheet.SheetNumber
-        return sheet.Name == name and (n == number or n.startswith(number + u"(") or n.startswith(number + u"-"))
-    def order(sheet):
-        digits = "".join(ch if ch.isdigit() else " " for ch in sheet.SheetNumber[len(number):]).split()
-        return int(digits[0]) if digits else 1
-    existing = sorted([sheet for sheet in all_sheets if ours(sheet)], key=order)
-    wanted = page_numbers(number, pages)
-    taken = {sheet.SheetNumber for sheet in all_sheets if not ours(sheet)}
-    clash = [n for n in wanted if n in taken]
-    if clash:
-        raise ValueError(u"시트 번호 {}를 다른 시트가 쓰고 있습니다. 그 시트 번호를 바꾼 뒤 다시 실행하세요.".format(clash[0]))
-    for sheet in existing[pages:]:
+def method_sheet(DB, doc, number, name):
+    """RC-02 한 장을 쓴다. 이전 버전이 만든 RC-02(1/2) 같은 추가 장은 지운다."""
+    sheets = list(DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet))
+    extra = [v for v in sheets if v.Name == name and v.SheetNumber.startswith(number + u"(")]
+    keep = next((v for v in sheets if v.SheetNumber == number and v.Name == name), None)
+    if keep is None and extra:
+        keep = extra.pop(0)
+        keep.SheetNumber = number
+    for sheet in extra:
         doc.Delete(sheet.Id)
-    sheets = existing[:pages]
-    for sheet in sheets:
-        sheet.SheetNumber = u"{}-tmp-{}".format(number, uuid4().hex[:8])
-    while len(sheets) < pages:
-        sheets.append(DB.ViewSheet.Create(doc, DB.ElementId.InvalidElementId))
-    for sheet, wanted_number in zip(sheets, wanted):
-        try:
-            sheet.SheetNumber = wanted_number
-        except Exception:
-            # 시트 번호에 / 를 쓸 수 없는 환경이면 RC-02(1-2) 형식을 쓴다.
-            sheet.SheetNumber = wanted_number.replace(u"/", u"-")
-        sheet.Name = name
-    return sheets
+    return keep or get_reclaim_sheet(DB, doc, number, name)
 
 
 def schedule_width(schedule):
     widths = {u"범주": 0.13, u"패밀리 및 유형": 0.32, u"폐기물 성상": 0.14,
               u"부재 처리 방식": 0.15, u"중량(t)": 0.13, u"처리비(원)": 0.16,
               u"매각수익(원)": 0.16}
-    visible = 0
     for field_id in schedule.Definition.GetFieldOrder():
         field = schedule.Definition.GetField(field_id)
         if field.ColumnHeading in widths:
             field.SheetColumnWidth = widths[field.ColumnHeading]
-        if not field.IsHidden:
-            visible += field.SheetColumnWidth
-    return visible
 
 
-def place_schedule_pages(DB, doc, number, name, schedule):
-    """표를 A1 시트들에 좌우 열로만 나눠 배치한다. 반환: [(시트, [표 조각들])]"""
-    frame = method_frame()
+def place_schedule_columns(DB, doc, sheet, schedule):
+    """표를 최대 4개의 세로 열로 나눠 나란히 놓는다. 같은 열은 위아래로 나누지 않는다."""
     schedule_width(schedule)
     for instance in DB.FilteredElementCollector(doc).OfClass(DB.ScheduleSheetInstance).ToElements():
         if instance.ScheduleId == schedule.Id:
@@ -503,45 +444,23 @@ def place_schedule_pages(DB, doc, number, name, schedule):
     for index in range(schedule.GetSegmentCount() - 1, 0, -1):
         schedule.MergeSegments(index, index - 1)
     doc.Regenerate()
-    probe_sheet = method_pages(DB, doc, number, name, 1)[0]
-    whole = DB.ScheduleSheetInstance.Create(doc, probe_sheet.Id, schedule.Id,
-                                            DB.XYZ(frame["content_left"], frame["schedule_top"], 0))
+    origin = DB.XYZ(ORIGIN[0], ORIGIN[1], 0)
+    whole = DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, origin)
     doc.Regenerate()
-    box = whole.get_BoundingBox(probe_sheet)
-    total_height, column_width = box.Max.Y - box.Min.Y, box.Max.X - box.Min.X
+    box = whole.get_BoundingBox(sheet)
+    columns = column_count(box.Max.Y - box.Min.Y)
+    if columns == 1:
+        return [whole]
+    width = box.Max.X - box.Min.X
     doc.Delete(whole.Id)
     doc.Regenerate()
-
-    extra = 0
-    for _attempt in range(6):
-        segments, columns, pages = plan_pages(total_height, column_width, extra)
-        sheets = method_pages(DB, doc, number, name, pages)
-        for index in range(schedule.GetSegmentCount() - 1, 0, -1):
-            schedule.MergeSegments(index, index - 1)
-        if segments > 1:
-            schedule.Split(segments)
-        doc.Regenerate()
-        placed = [[] for _ in sheets]
-        for index in range(segments):
-            page, column = divmod(index, columns)
-            point = DB.XYZ(frame["content_left"] + column * (column_width + COLUMN_GAP), frame["schedule_top"], 0)
-            if segments == 1:
-                instance = DB.ScheduleSheetInstance.Create(doc, sheets[page].Id, schedule.Id, point)
-            else:
-                instance = DB.ScheduleSheetInstance.Create(doc, sheets[page].Id, schedule.Id, point, index)
-            placed[page].append(instance)
-        doc.Regenerate()
-        tallest = max(item.get_BoundingBox(sheet).Max.Y - item.get_BoundingBox(sheet).Min.Y
-                      for sheet, items in zip(sheets, placed) for item in items)
-        if tallest <= frame["height"] + 0.005:
-            return list(zip(sheets, placed))
-        # 예상보다 머리글이 높으면 조각을 늘려 다시 배치한다.
-        for items in placed:
-            for item in items:
-                doc.Delete(item.Id)
-        doc.Regenerate()
-        extra += columns
-    return list(zip(sheets, placed))
+    schedule.Split(columns)
+    doc.Regenerate()
+    result = []
+    for index in range(columns):
+        point = DB.XYZ(ORIGIN[0] + index * (width + COLUMN_GAP), ORIGIN[1], 0)
+        result.append(DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, point, index))
+    return result
 
 
 class SheetGrid(object):
@@ -594,39 +513,36 @@ class SheetGrid(object):
 
 
 def make_method_sheet(DB, doc, number, name, schedule, data, costs):
-    pages = place_schedule_pages(DB, doc, number, name, schedule)
-    frame = method_frame()
-    left, right = frame["content_left"], frame["content_right"]
+    sheet = method_sheet(DB, doc, number, name)
+    instances = place_schedule_columns(DB, doc, sheet, schedule)
+    doc.Regenerate()
+    boxes = [i.get_BoundingBox(sheet) for i in instances]
+    left = min(b.Min.X for b in boxes)
+    right = max(b.Max.X for b in boxes)
+    top = max(b.Max.Y for b in boxes) + GAP
+    bottom = min(b.Min.Y for b in boxes) - GAP
+    for note in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote).ToElements():
+        if (note.Text.startswith(name + u"\r") or note.Text.startswith(name + u"\n")
+                or note.Text.startswith(u"최종 합계 (건물 전체 순비용)")):
+            doc.Delete(note.Id)
+    grid = SheetGrid(DB, doc, sheet, "ReClaim Method")
     middle = (left + right) / 2
-    top = frame["schedule_top"] + GAP
+    grid.row(left, right, top + 0.49, [(right, name, 10, True)], 0.11)
+    grid.row(left, right, top + 0.38, [(left + 0.32, u"대상 IFC", 5, True),
+                                       (right, data["source"], 6, False)])
     amounts = [u"{:,}원".format(costs[key]) if costs else u"자료 없음" for key in ("disposal", "revenue")]
+    grid.row(left, right, top + 0.28, [(middle, u"건물 전체 처리비", 5, True),
+                                       (right, u"건물 전체 매각수익", 5, True)], 0.08)
+    grid.row(left, right, top + 0.20, [(middle, amounts[0], 9, True),
+                                       (right, amounts[1], 9, True)])
     scope = (u"전면 분별 시나리오에서도 콘크리트 구조체 등은 압쇄 처리할 수 있습니다."
              if number == "RC-02" else u"처리비와 매각수익은 건물 전체 집계입니다.")
+    grid.row(left, right, top + 0.10, [(right, scope, 5.5, False)])
     net = data["selective_total_won" if number == "RC-02" else "crush_total_won"]
-    total = len(pages)
-    for page, (sheet, _instances) in enumerate(pages, 1):
-        for note in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote).ToElements():
-            if (note.Text.startswith(name + u"\r") or note.Text.startswith(name + u"\n")
-                    or note.Text.startswith(u"최종 합계 (건물 전체 순비용)")):
-                doc.Delete(note.Id)
-        grid = SheetGrid(DB, doc, sheet, "ReClaim Method")
-        title = name if total == 1 else u"{} ({}/{})".format(name, page, total)
-        grid.row(left, right, top + 0.49, [(right, title, 10, True)], 0.11)
-        grid.row(left, right, top + 0.38, [(left + 0.32, u"대상 IFC", 5, True),
-                                           (right, data["source"], 6, False)])
-        grid.row(left, right, top + 0.28, [(middle, u"건물 전체 처리비", 5, True),
-                                           (right, u"건물 전체 매각수익", 5, True)], 0.08)
-        grid.row(left, right, top + 0.20, [(middle, amounts[0], 9, True),
-                                           (right, amounts[1], 9, True)])
-        grid.row(left, right, top + 0.10, [(right, scope, 5.5, False)])
-        bottom = frame["schedule_floor"] - GAP
-        if page == total:
-            grid.row(left, right, bottom, [(middle, u"최종 합계 · 건물 전체 순비용", 7, True),
-                                           (right, u"{:,}원".format(net), 10, True)], 0.12)
-        else:
-            grid.row(left, right, bottom, [(right, u"다음 장에 계속 ({}/{})".format(page + 1, total), 6, False)], 0.12)
-        draw_sheet_border(DB, doc, sheet, data, frame)
-    return pages[0][0]
+    grid.row(left, right, bottom, [(middle, u"최종 합계 · 건물 전체 순비용", 7, True),
+                                   (right, u"{:,}원".format(net), 10, True)], 0.12)
+    draw_sheet_border(DB, doc, sheet, data)
+    return sheet
 
 
 def place_cost_chart(DB, doc, sheet, payload):
@@ -1036,13 +952,7 @@ if __name__ == "__main__":
         assert u"-2,000 원" in sheet_text(data, 8, 1)
         assert u"8개 기록 / 1개" in sheet_text(data, 8, 1)
         assert u"판정 보류" in sheet_text(dict(data, recommended=None), 8, 1)
-        frame = method_frame()
-        assert plan_pages(0.5, 1.19) == (1, 1, 1)                      # 한 열에 들어가면 나누지 않는다
-        segments, columns, pages = plan_pages(frame["height"] * 1.5, 1.19)
-        assert (columns, pages) == (2, 1) and segments == 2             # 좌우 두 열, 한 장
-        segments, columns, pages = plan_pages(frame["height"] * 5, 1.19)
-        assert pages > 1 and segments == pages * columns               # 넘치면 장을 늘리고 열 높이를 고르게
-        assert page_numbers("RC-02", 2) == [u"RC-02(1/2)", u"RC-02(2/2)"] and page_numbers("RC-02", 1) == ["RC-02"]
-        print("self-check ok: CSV parsing, comparison labels and sheet paging")
+        assert [column_count(h) for h in (0.5, 1.35, 2.0, 3.5, 5.0, 12.0)] == [1, 1, 2, 3, 4, 4]
+        print("self-check ok: CSV parsing, comparison labels and schedule columns")
     else:
         run_in_revit()
