@@ -399,58 +399,89 @@ TITLE_BLOCK_LOGO = (
 )
 
 
+def schedule_grid(height, width):
+    """Choose the smallest landscape frame that fits an even split."""
+    if height <= 1.35:
+        return 1, 1
+    best = None
+    for columns in range(1, 5):
+        # Repeat the column headers in each segment. The summary and title block
+        # take about a foot of vertical space outside the schedule grid.
+        grid_width = columns * width + (columns - 1) * 0.14
+        for rows in range(1, int(ceil(height / 1.35)) + 1):
+            count = columns * rows
+            segment_height = height / count + 0.10
+            if segment_height > 1.45:
+                continue
+            grid_height = rows * segment_height + (rows - 1) * 0.12
+            frame_width = max(grid_width + 0.09, (grid_height + 1.0) * 841.0 / 594.0)
+            candidate = (frame_width, count, columns)
+            if best is None or candidate < best:
+                best = candidate
+    return best[1], best[2]
+
+
 def place_schedule(DB, doc, sheet, schedule):
-    from System import ArgumentException
-    from Autodesk.Revit import Exceptions
-    instances = [item for item in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.ScheduleSheetInstance)
-                 if item.ScheduleId == schedule.Id]
+    placements = [item for item in DB.FilteredElementCollector(doc).OfClass(DB.ScheduleSheetInstance)
+                  if item.ScheduleId == schedule.Id]
+    instances = [item for item in placements if item.OwnerViewId == sheet.Id]
     origin = DB.XYZ(0.09, 0.99, 0)
-    # Compact numeric columns leave room for two repeated headers on landscape sheets.
     widths = {u"범주": 0.13, u"패밀리 및 유형": 0.32, u"폐기물 성상": 0.14,
               u"부재 처리 방식": 0.15, u"중량(t)": 0.13, u"처리비(원)": 0.16,
               u"매각수익(원)": 0.16}
+    visible_width = 0
     for field_id in schedule.Definition.GetFieldOrder():
         field = schedule.Definition.GetField(field_id)
         if field.ColumnHeading in widths:
             field.SheetColumnWidth = widths[field.ColumnHeading]
-    width = sum(schedule.Definition.GetField(field).SheetColumnWidth
-                for field in schedule.Definition.GetFieldOrder()
-                if not schedule.Definition.GetField(field).IsHidden)
-    count = schedule.GetSegmentCount()
-    if count == 1:
-        instance = instances[0] if instances else DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, origin)
-        instance.Point = origin
+        if not field.IsHidden:
+            visible_width += field.SheetColumnWidth
+
+    segment_count = schedule.GetSegmentCount()
+    if len(placements) == len(instances):
+        for instance in instances:
+            doc.Delete(instance.Id)
+        for index in range(segment_count - 1, 0, -1):
+            schedule.MergeSegments(index, index - 1)
         doc.Regenerate()
-        box = instance.get_BoundingBox(sheet)
-        if box is None or box.Max.Y - box.Min.Y <= 0.75:
-            return [instance]
-        with_split = DB.SubTransaction(doc)
-        with_split.Start()
-        try:
-            original_id = instance.Id
-            doc.Delete(original_id)
-            doc.Regenerate()
-            schedule.Split(2)
-            segments = [DB.ScheduleSheetInstance.Create(
-                doc, sheet.Id, schedule.Id, DB.XYZ(origin.X + i * (width + 0.14), origin.Y, 0), i)
-                for i in range(2)]
-            with_split.Commit()
-            return segments
-        except (ArgumentException, Exceptions.ArgumentException, Exceptions.InvalidOperationException):
-            with_split.RollBack()
-            return [doc.GetElement(original_id)]
+        whole = DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, origin)
+        doc.Regenerate()
+        box = whole.get_BoundingBox(sheet)
+        segment_count, columns = schedule_grid(box.Max.Y - box.Min.Y, visible_width)
+        if segment_count == 1:
+            return [whole]
+        doc.Delete(whole.Id)
+        doc.Regenerate()
+        schedule.Split(segment_count)
+        schedule_count = schedule.GetSegmentCount()
+        instances = []
+    else:
+        # Segment definitions are shared by every sheet hosting this schedule.
+        # Keep those placements valid and only rearrange this sheet.
+        schedule_count = segment_count
+        columns = min(4, schedule_count)
+        if schedule_count == 1:
+            whole = instances[0] if instances else DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, origin)
+            whole.Point = origin
+            return [whole]
 
     by_segment = {item.SegmentIndex: item for item in instances}
-    segments = []
-    for i in range(count):
-        point = DB.XYZ(origin.X + i * (width + 0.14), origin.Y, 0)
-        instance = by_segment.get(i)
-        if instance is None:
-            instance = DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, point, i)
-        else:
-            instance.Point = point
-        segments.append(instance)
-    return segments
+    result = []
+    row_top = origin.Y
+    for start in range(0, schedule_count, columns):
+        row = []
+        for index in range(start, min(start + columns, schedule_count)):
+            point = DB.XYZ(origin.X + (index - start) * (visible_width + 0.14), row_top, 0)
+            instance = by_segment.get(index)
+            if instance is None:
+                instance = DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, point, index)
+            else:
+                instance.Point = point
+            row.append(instance)
+        doc.Regenerate()
+        row_top = min(item.get_BoundingBox(sheet).Min.Y for item in row) - 0.14
+        result.extend(row)
+    return result
 
 
 class SheetGrid(object):
