@@ -14,6 +14,7 @@ from uuid import uuid4
 TEXT = ("RC_Waste", "RC_Method")
 NUMBER = ("RC_Tons", "RC_DisposalCost", "RC_Revenue")
 RUN_PARAMETER = "RC_ResultRun"
+CRUSH_METHOD = "RC_CrushMethod"
 SHEET_NUMBER = "RC-01"
 SHEET_NAME = u"해체 경제성 비교"
 VIEW_NAME = u"ReClaim - 해체 대상 3D"
@@ -66,6 +67,7 @@ def read_revit_export(path):
             if isinf(value) or isnan(value):
                 raise ValueError("Invalid ReClaim numeric value")
             row[key] = value
+    summary = dict(summary, scenario_costs=payload.get("scenario_costs", {}))
     return summary, rows
 
 
@@ -96,7 +98,7 @@ def sheet_text(s, done, missing):
         u"비교 결과    {}".format(recommended_method(s)),
         u"",
         u"부재 결과: {}개 기록 / {}개 매칭 또는 기록 실패".format(done, missing),
-        u"아래 집계는 매칭된 부재의 전면 분별 기준입니다.",
+        u"부재별 결과는 RC-02 전면 분별과 RC-03 일괄 압쇄 시트에서 확인할 수 있습니다.",
         u"건물 전체 순비용에는 인건비·장비비 등 공통 비용도 반영됩니다. 형상에 대응하지 않는 보정량은 부재 집계에서 제외합니다." + scope,
     ))
 
@@ -116,7 +118,7 @@ def make_schedule(DB, doc, name, parameters, run_id, grouped):
         fields = {field.ParameterId: field for field in definition.GetSchedulableFields()
                   if field.FieldType == DB.ScheduleFieldType.Instance}
         columns = (
-            ("RC_Waste", u"폐기물 성상", 0.23), ("RC_Method", u"부재 처리", 0.17),
+            ("RC_Waste", u"폐기물 성상", 0.23), ("RC_Method", u"부재 처리 방식", 0.17),
             ("RC_Tons", u"중량(t)", 0.19), ("RC_DisposalCost", u"처리비(원)", 0.24),
             ("RC_Revenue", u"매각수익(원)", 0.24), (RUN_PARAMETER, u"결과 ID", 0.16),
         )
@@ -136,6 +138,8 @@ def make_schedule(DB, doc, name, parameters, run_id, grouped):
             definition.ShowGrandTotalTitle = True
             definition.GrandTotalTitle = u"합계"
         for key, heading, width in columns:
+            if key not in parameters:
+                continue
             field = definition.AddField(fields[parameters[key]])
             field.ColumnHeading = heading
             field.SheetColumnWidth = width
@@ -147,7 +151,7 @@ def make_schedule(DB, doc, name, parameters, run_id, grouped):
 
     for fid in definition.GetFieldOrder():
         field = definition.GetField(fid)
-        if field.ParameterId in (parameters["RC_DisposalCost"], parameters["RC_Revenue"]):
+        if field.ParameterId in (parameters.get("RC_DisposalCost"), parameters.get("RC_Revenue")):
             fmt = DB.FormatOptions(DB.UnitTypeId.Fixed)
             fmt.Accuracy = 1
             fmt.UseDigitGrouping = True
@@ -167,28 +171,57 @@ def make_schedule(DB, doc, name, parameters, run_id, grouped):
     return view
 
 
-def make_comparison_sheet(DB, doc, data, parameters, run_id, done, missing):
+def get_reclaim_sheet(DB, doc, number_prefix, name, legacy_name=None):
     sheet = next((v for v in DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet)
-                  if v.SheetNumber == SHEET_NUMBER and v.Name == SHEET_NAME), None)
+                  if v.SheetNumber == number_prefix and v.Name in (name, legacy_name)), None)
     if sheet is None:
         used_numbers = {v.SheetNumber for v in DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet)}
         sheet = next((v for v in DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet)
-                      if v.Name == SHEET_NAME and v.SheetNumber.startswith(SHEET_NUMBER + "-")), None)
+                      if v.Name in (name, legacy_name) and v.SheetNumber.startswith(number_prefix + "-")), None)
         if sheet is None:
             sheet = DB.ViewSheet.Create(doc, DB.ElementId.InvalidElementId)
-            number = SHEET_NUMBER
+            number = number_prefix
             suffix = 2
             while number in used_numbers:
-                number = "{}-{}".format(SHEET_NUMBER, suffix)
+                number = "{}-{}".format(number_prefix, suffix)
                 suffix += 1
             sheet.SheetNumber = number
-            sheet.Name = SHEET_NAME
+    sheet.Name = name
 
-    schedule = make_schedule(DB, doc, SCHEDULE_NAME, parameters, run_id, grouped=True)
-    make_schedule(DB, doc, DETAIL_NAME, parameters, run_id, grouped=False)
+    return sheet
+
+
+def place_schedule(DB, doc, sheet, schedule):
     placed = DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.ScheduleSheetInstance)
     if not any(instance.ScheduleId == schedule.Id for instance in placed):
-        DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, DB.XYZ(0.09, 0.52, 0))
+        DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, DB.XYZ(0.09, 0.99, 0))
+
+
+def make_method_sheet(DB, doc, number, name, schedule, data, costs):
+    sheet = get_reclaim_sheet(DB, doc, number, name)
+    place_schedule(DB, doc, sheet, schedule)
+    text = u"대상 IFC: {}".format(data["source"])
+    if costs:
+        text += u"\n건물 전체 처리비 {:,}원 / 매각수익 {:,}원".format(
+            costs["disposal"], costs["revenue"])
+    if number == "RC-02":
+        text += u"\n전면 분별 시나리오에서도 콘크리트 구조체 등은 압쇄 처리할 수 있습니다."
+    title = name + u"\n"
+    notes = DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
+    note = next((n for n in notes if n.Text.startswith(name)), None)
+    if note is None:
+        style = doc.GetDefaultElementTypeId(DB.ElementTypeGroup.TextNoteType)
+        DB.TextNote.Create(doc, sheet.Id, DB.XYZ(0.09, 1.16, 0), title + text, style)
+    else:
+        note.Text = title + text
+    return sheet
+
+
+def make_comparison_sheet(DB, doc, data, parameters, run_id, done, missing):
+    sheet = get_reclaim_sheet(DB, doc, SHEET_NUMBER, u"경제성 비교 · 일괄 압쇄 vs 전면 분별", SHEET_NAME)
+    for instance in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.ScheduleSheetInstance).ToElements():
+        if doc.GetElement(instance.ScheduleId).Name == SCHEDULE_NAME:
+            doc.Delete(instance.Id)
 
     note_text = sheet_text(data, done, missing)
     notes = DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
@@ -340,11 +373,13 @@ def run_in_revit():
                     failures[(u"모델에 해당 ID 없음", r["Category"])] += 1
                     continue
                 params = {k: el.get_Parameter(definitions[k].GUID) for k in keys}
-                if any(p is None or p.IsReadOnly for p in params.values()):
+                crush_method = el.get_Parameter(definitions[CRUSH_METHOD].GUID)
+                if any(p is None or p.IsReadOnly for p in list(params.values()) + [crush_method]):
                     failures[(u"기록 가능한 매개변수 없음", el.Category.Name if el.Category else r["Category"])] += 1
                     continue
                 for k in keys:
                     params[k].Set(run_id if k == RUN_PARAMETER else r[k])
+                crush_method.Set(u"제외" if r["RC_Method"] == u"제외" else u"압쇄")
                 done += 1
 
             missing = sum(failures.values())
@@ -353,6 +388,16 @@ def run_in_revit():
             doc.ProjectInformation.get_Parameter(definitions["RC_Summary"].GUID).Set(project_summary)
             parameter_ids = {k: DB.SharedParameterElement.Lookup(doc, definitions[k].GUID).Id for k in keys}
             sheet = make_comparison_sheet(DB, doc, data, parameter_ids, run_id, done, missing)
+            selective = make_schedule(DB, doc, DETAIL_NAME, parameter_ids, run_id, grouped=False)
+            crush_ids = {key: parameter_ids[key] for key in ("RC_Waste", "RC_Tons", RUN_PARAMETER)}
+            crush_ids["RC_Method"] = DB.SharedParameterElement.Lookup(doc, definitions[CRUSH_METHOD].GUID).Id
+            crush = make_schedule(DB, doc, u"ReClaim - 일괄 압쇄 부재별 처리 및 중량",
+                                  crush_ids, run_id, grouped=False)
+            costs = data.get("scenario_costs", {})
+            make_method_sheet(DB, doc, "RC-02", u"전면 분별 · 부재별 해체 결과",
+                              selective, data, costs.get("selective"))
+            make_method_sheet(DB, doc, "RC-03", u"일괄 압쇄 · 부재별 처리 및 중량",
+                              crush, data, costs.get("crush"))
     finally:
         app.SharedParametersFilename = old
     out.print_md(u"**{}개 부재에 기록했습니다.** 매칭 또는 기록 실패: {}개".format(done, missing))
