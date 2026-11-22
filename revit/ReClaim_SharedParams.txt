@@ -13,3 +13,5 @@ PARAM	d86b86d0-f1cb-5574-8cc3-0d6b89ee86f4	RC_Revenue	NUMBER		1	1	전면 분별 
 PARAM	f3334283-9783-5600-8477-cd4d1fc2cc96	RC_Summary	TEXT		1	1	프로젝트 정보용: 비교 결과 요약	1
 PARAM	9e8b6486-09b4-4e12-9b4e-94fe1356e187	RC_ResultRun	TEXT		1	1	부재 일람표에 표시할 결과 실행 ID	0
 PARAM	2f94ade7-8d40-4bd9-9ad2-cc43660a47ff	RC_CrushMethod	TEXT		1	1	일괄 압쇄 시나리오 처리 방식	1
+PARAM	c8a991ed-79ec-42c6-889d-6120ae201c1d	RC_CrushDisposalCost	NUMBER		1	1	일괄 압쇄 부재별 처리비	1
+PARAM	8fd190fe-c57d-408f-91e4-fe60ccaa78d9	RC_CrushRevenue	NUMBER		1	1	일괄 압쇄 부재별 매각수익	1
