@@ -2,9 +2,9 @@
 import { selectiveEquipmentHoursPerDay, costScenario, concreteCut, officeSalvage, steelDismantling, compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES, concreteGrades, concreteGradeLink, streamTons, PRESS_FINISH_BASELINE } from "./scenario.js?v=ifc-equipment-days-1";
 import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validationCases, comparableCases, calibrateStructure, benchmark } from "./calibration.js";
 import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js?v=ifc-equipment-days-1";
-import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=crush-elements-1";
+import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=finish-routing-2";
 import { COST_PARTS, REVENUE_COLOR, stackedBars, tornadoChart, histChart, legend, mil, num } from "./charts.js";
-import { reportHtml, kstStamp, fitSchedules } from "./report.js?v=crush-elements-1";
+import { reportHtml, kstStamp, fitSchedules } from "./report.js?v=finish-routing-2";
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -223,7 +223,6 @@ function derive() {
   if (state.source === "ifc" && !openSteelFrame && q.labor === "quantity") {
     q.finishFallbackDisabled = Boolean(state.uploadedPlanScope?.finishFallbackDisabled);
     connectFinishTakeoff(q, q.raw, rates, state.p);
-    q.concreteCase = "linked";
   }
   q.panelWeightMissing = state.panelTons == null && classified.some(el => el.parts.some(part => part.stream === "panel" && !(part.tons > 0)));
   q.t.panel = state.panelTons ?? q.t.panel;
@@ -1094,7 +1093,7 @@ function summary(d) {
 
 function exportElementRows(d, mode = "selective") {
   const result = d.cmp[mode];
-  const rows = elementResults(d.classified, state.p, result.mixed.fee, d.q, mode);
+  const rows = elementResults(d.classified, state.p, result.mixed.fee, d.q, mode, result);
   const appliedTons = Object.values(streamTons(d.q, state.p).t).reduce((sum, weight) => sum + weight, 0);
   return reconcileElementResults([...rows, ...d.frameAdjustments], appliedTons, result);
 }

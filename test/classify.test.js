@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { classify, materialClass, isOpenSteelFrame, quantitiesFromElements, supplement, elementResults, toCsv, groupKey } from "../assets/js/classify.js";
 import { meshVolume, meshSurface, massUnitTons } from "../assets/js/ifc.js";
-import { paramValues } from "../assets/js/scenario.js";
+import { costScenario, paramValues, quantitiesFromArea } from "../assets/js/scenario.js";
 
 const rates = JSON.parse(readFileSync(new URL("../assets/data/rates.json", import.meta.url)));
 const el = (category, layers, volume = 1, area = 10) => ({ expressID: 1, globalId: "G", tag: "42", category, floor: 1, volume, area, layers });
@@ -94,4 +94,26 @@ test("개방형 철골과 바닥이 있는 철골 건물 구분", () => {
   ].map(member => classify(member, rates));
   assert.equal(isOpenSteelFrame(members), true);
   assert.equal(isOpenSteelFrame([...members, classify(el("slab", [{name:"콘크리트"}]), rates)]), false);
+});
+
+test("일괄 압쇄 부재표는 건물 전체와 같은 보드·타일 처리 경로를 적용한다", () => {
+  const p = paramValues(rates);
+  const q = quantitiesFromArea(1000, "비주거 RC", rates);
+  q.t = { ...Object.fromEntries(Object.keys(q.t).map(key => [key, 0])), board: 10, tile: 10 };
+  q.concrete_m3 = 0;
+  q.finishTakeoff = {};
+  q.finishBaseline = { board: 0.6, tile: 1 };
+  q.finishDemolitionMixedShare = 0;
+  q.boardCrush = 20;
+  q.boardFee = 12345;
+  const scenario = costScenario(q, p, "crush");
+  assert.equal(scenario.finishRoutes.board.separate, 2);
+  assert.equal(scenario.finishRoutes.board.concreteCarryover, 4);
+  const classified = ["board", "tile"].map(stream => ({
+    stream, tons: 10, parts: [{ stream, tons: 10 }],
+  }));
+  const rows = elementResults(classified, p, scenario.mixed.fee, q, "crush", scenario);
+  assert.ok(Math.abs(rows[0].disposal - (2 * 12345 + 4 * scenario.mixed.fee + 4 * p.fee_concrete)) < 1e-8);
+  assert.ok(Math.abs(rows[1].disposal - 10 * scenario.mixed.fee) < 1e-8);
+  assert.ok(Math.abs(rows[0].disposal + rows[1].disposal - scenario.disposal) < 1e-8);
 });

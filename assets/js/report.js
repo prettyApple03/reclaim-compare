@@ -157,7 +157,7 @@ export function reportHtml(ctx) {
     sheets.push(methodSheet(ctx, {
       number: "RC-03", name: "일괄 압쇄 · 부재별 처리 및 중량", heading: "일괄 압쇄",
       rows: label(scheduleRows(ctx.crushElements ?? [])), costs: ctx.costs?.crush, net: ctx.summary.crush_total_won,
-      scope: "일괄 압쇄는 선철거 없이 모든 부재를 구조체와 함께 압쇄 해체합니다.",
+      scope: "일괄 압쇄의 마감재 처리비에는 입력 조건에 따른 선철거와 반출 경로를 반영합니다.",
       fields, unattributed: ctx.unattributed?.crush,
     }));
   }

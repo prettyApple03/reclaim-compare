@@ -224,22 +224,34 @@ export function isStructuralSteelPart(el, part) {
   return part.stream === "metal" && (["beam", "column"].includes(el.category) || el.category === "plate" && !el.guessed);
 }
 
-export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified, q = {}, mode = "selective") {
+export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified, q = {}, mode = "selective", scenario = null) {
   const sel = mode === "selective";
   const cost = (net) => Math.max(0, -net), gain = (net) => Math.max(0, net);
-  // 일괄 압쇄는 선철거·분리를 하지 않으므로 분리율이 0이다
+  // 목재·수지·유리의 기본 분리율은 분별 공법에 적용한다.
   const split = sel ? separation(p) : { wood: 0, resin: 0, glass: 0, board: 0 };
   const quotedShare = q.cleanPrice == null ? 0 : ((sel ? q.cleanSel : q.cleanCrush) ?? 0) / 100;
   const gradeFee = concreteGrades(p, sel, q.concreteCase, q.t ? q : undefined).reduce((sum, grade) => sum + grade.share * grade.fee, 0);
   const concreteFee = (1 - quotedShare) * gradeFee + quotedShare * (q.cleanPrice ?? 0);
+  const finishFee = (key, quote, fallback) => {
+    if (!scenario) return fallback;
+    const route = scenario.finishRoutes?.[key];
+    const total = route?.total ?? q.t?.[key] ?? 0;
+    if (!(total > 0)) return fallback;
+    const separate = route?.separate ?? scenario.split[key];
+    const carryover = route?.concreteCarryover ?? 0;
+    const mixed = total - separate - carryover;
+    return (separate * Math.max(0, quote) + mixed * mixedFee + carryover * p.fee_concrete) / total;
+  };
+  const boardFee = q.boardFee ?? p.fee_board_separate;
   const fee = (s) => s === "concrete" ? concreteFee
     : s === "masonry" ? p.fee_concrete
     : s === "wood" ? split.wood * cost(p.net_wood) + (1 - split.wood) * mixedFee
     : s === "resin" ? split.resin * cost(p.net_resin) + (1 - split.resin) * mixedFee
     : s === "glass" ? split.glass * Math.max(0, p.fee_glass_separate) + (1 - split.glass) * mixedFee
-    : s === "board" ? split.board * Math.max(0, p.fee_board_separate) + (1 - split.board) * mixedFee
+    : s === "board" ? finishFee("board", boardFee, split.board * Math.max(0, boardFee) + (1 - split.board) * mixedFee)
+    : s === "tile" ? finishFee("tile", q.tileFee ?? -1, mixedFee)
     : s === "panel" ? Math.max(0, p.fee_panel)
-    : s === "mixed" || s === "tile" ? mixedFee : 0;
+    : s === "mixed" ? mixedFee : 0;
   const scrapRecovery = sel ? p.rec_scrap_sel : p.rec_scrap_crush;
   const nonferrous = sel ? p.rec_nonferrous_sel : p.rec_nonferrous_crush;
   const copperRate = (sel ? p.rec_copper_sel : p.rec_copper_crush) ?? nonferrous;

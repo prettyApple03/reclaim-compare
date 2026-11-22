@@ -541,7 +541,7 @@ def make_method_sheet(DB, doc, number, name, schedule, data, costs):
     grid.row(left, right, top + 0.20, [(middle, amounts[0], 9, True),
                                        (right, amounts[1], 9, True)])
     scope = (u"전면 분별 시나리오에서도 콘크리트 구조체 등은 압쇄 처리할 수 있습니다."
-             if number == "RC-02" else u"일괄 압쇄는 선철거 없이 모든 부재를 구조체와 함께 압쇄 해체합니다.")
+             if number == "RC-02" else u"일괄 압쇄의 마감재 처리비에는 입력 조건에 따른 선철거와 반출 경로를 반영합니다.")
     grid.row(left, right, top + 0.10, [(right, scope, 5.5, False)])
     net = data["selective_total_won" if number == "RC-02" else "crush_total_won"]
     # 표 아래로 차례로 쌓는다: (미산정 안내) → (부재 미귀속) → 최종 합계
