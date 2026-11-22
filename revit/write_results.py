@@ -6,6 +6,7 @@
 # 처음 쓸 때는 모델 사본에서 실행해 본다.
 import io
 import json
+import re
 import os
 import base64
 import tempfile
@@ -413,21 +414,17 @@ ORIGIN = (0.09, 0.99)     # 첫 열의 왼쪽 위
 
 
 def column_count(total_height):
-    """표 높이 → 세로 열 수 (1~4). 각 열은 위아래로 끊지 않고 한 줄로 이어진다."""
-    return max(1, min(MAX_COLUMNS, int(ceil(total_height / COLUMN_HEIGHT))))
+    return max(1, int(ceil(total_height / COLUMN_HEIGHT)))
 
 
-def method_sheet(DB, doc, number, name):
-    """RC-02 한 장을 쓴다. 이전 버전이 만든 RC-02(1/2) 같은 추가 장은 지운다."""
-    sheets = list(DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet))
-    extra = [v for v in sheets if v.Name == name and v.SheetNumber.startswith(number + u"(")]
-    keep = next((v for v in sheets if v.SheetNumber == number and v.Name == name), None)
-    if keep is None and extra:
-        keep = extra.pop(0)
-        keep.SheetNumber = number
-    for sheet in extra:
-        doc.Delete(sheet.Id)
-    return keep or get_reclaim_sheet(DB, doc, number, name)
+def existing_method_pages(DB, doc, number, name):
+    pattern = re.compile(r"^" + re.escape(number) + r"(?:-\d+)?(?:\((\d+)/(\d+)\))?$")
+    pages = []
+    for sheet in DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet):
+        match = pattern.match(sheet.SheetNumber)
+        if match and sheet.Name == name:
+            pages.append((int(match.group(1) or 1), sheet))
+    return [sheet for index, sheet in sorted(pages, key=lambda item: item[0])]
 
 
 def schedule_width(schedule):
@@ -440,8 +437,12 @@ def schedule_width(schedule):
             field.SheetColumnWidth = widths[field.ColumnHeading]
 
 
-def place_schedule_columns(DB, doc, sheet, schedule):
-    """표를 최대 4개의 세로 열로 나눠 나란히 놓는다. 같은 열은 위아래로 나누지 않는다."""
+def place_schedule_columns(DB, doc, number, name, schedule):
+    pages = existing_method_pages(DB, doc, number, name)
+    if not pages:
+        pages.append(get_reclaim_sheet(DB, doc, number, name))
+    sheet = pages[0]
+    base = sheet.SheetNumber.split("(")[0]
     schedule_width(schedule)
     for instance in DB.FilteredElementCollector(doc).OfClass(DB.ScheduleSheetInstance).ToElements():
         if instance.ScheduleId == schedule.Id:
@@ -454,18 +455,35 @@ def place_schedule_columns(DB, doc, sheet, schedule):
     doc.Regenerate()
     box = whole.get_BoundingBox(sheet)
     columns = column_count(box.Max.Y - box.Min.Y)
-    if columns == 1:
-        return [whole]
     width = box.Max.X - box.Min.X
-    doc.Delete(whole.Id)
-    doc.Regenerate()
-    schedule.Split(columns)
-    doc.Regenerate()
-    result = []
-    for index in range(columns):
-        point = DB.XYZ(ORIGIN[0] + index * (width + COLUMN_GAP), ORIGIN[1], 0)
-        result.append(DB.ScheduleSheetInstance.Create(doc, sheet.Id, schedule.Id, point, index))
-    return result
+    if columns > 1:
+        doc.Delete(whole.Id)
+        doc.Regenerate()
+        schedule.Split(columns)
+        doc.Regenerate()
+        columns = schedule.GetSegmentCount()
+
+    count = (columns + MAX_COLUMNS - 1) // MAX_COLUMNS
+    for old in pages[count:]:
+        doc.Delete(old.Id)
+    pages = pages[:count]
+    while len(pages) < count:
+        page = DB.ViewSheet.Create(doc, DB.ElementId.InvalidElementId)
+        page.Name = name
+        pages.append(page)
+    groups = []
+    for index, page in enumerate(pages):
+        page.SheetNumber = base if count == 1 else "{}({}/{})".format(base, index + 1, count)
+        groups.append((page, []))
+    if columns == 1:
+        groups[0][1].append(whole)
+    else:
+        for segment in range(columns):
+            page_index, column = divmod(segment, MAX_COLUMNS)
+            page, instances = groups[page_index]
+            point = DB.XYZ(ORIGIN[0] + column * (width + COLUMN_GAP), ORIGIN[1], 0)
+            instances.append(DB.ScheduleSheetInstance.Create(doc, page.Id, schedule.Id, point, segment))
+    return groups
 
 
 class SheetGrid(object):
@@ -518,8 +536,13 @@ class SheetGrid(object):
 
 
 def make_method_sheet(DB, doc, number, name, schedule, data, costs):
-    sheet = method_sheet(DB, doc, number, name)
-    instances = place_schedule_columns(DB, doc, sheet, schedule)
+    pages = place_schedule_columns(DB, doc, number, name, schedule)
+    for sheet, instances in pages:
+        draw_method_page(DB, doc, sheet, number, name, instances, data, costs)
+    return [sheet.SheetNumber for sheet, instances in pages]
+
+
+def draw_method_page(DB, doc, sheet, number, name, instances, data, costs):
     doc.Regenerate()
     boxes = [i.get_BoundingBox(sheet) for i in instances]
     left = min(b.Min.X for b in boxes)
@@ -941,9 +964,9 @@ def run_in_revit():
             crush = make_schedule(DB, doc, u"ReClaim - 일괄 압쇄 부재별 처리 및 중량",
                                   crush_ids, run_id, grouped=False)
             costs = data.get("scenario_costs", {})
-            make_method_sheet(DB, doc, "RC-02", u"전면 분별 · 부재별 해체 결과",
+            page_numbers = make_method_sheet(DB, doc, "RC-02", u"전면 분별 · 부재별 해체 결과",
                               selective, data, costs.get("selective"))
-            make_method_sheet(DB, doc, "RC-03", u"일괄 압쇄 · 부재별 처리 및 중량",
+            page_numbers += make_method_sheet(DB, doc, "RC-03", u"일괄 압쇄 · 부재별 처리 및 중량",
                               crush, data, costs.get("crush"))
     finally:
         app.SharedParametersFilename = old
@@ -951,6 +974,7 @@ def run_in_revit():
     for (reason, category), count in sorted(failures.items()):
         out.print_md(u"- {} · {}: {}개".format(reason, category, count))
     out.print_md(u"**시트 {} — {}** · 프로젝트 탐색기의 시트에서 확인하세요.".format(sheet.SheetNumber, sheet.Name))
+    out.print_md(u"공법별 상세 시트: " + u", ".join(page_numbers))
     revit.uidoc.RequestViewChange(sheet)
 
 
@@ -971,7 +995,7 @@ if __name__ == "__main__":
         assert u"-2,000 원" in sheet_text(data, 8, 1)
         assert u"8개 기록 / 1개" in sheet_text(data, 8, 1)
         assert u"판정 보류" in sheet_text(dict(data, recommended=None), 8, 1)
-        assert [column_count(h) for h in (0.5, 1.35, 2.0, 3.5, 5.0, 12.0)] == [1, 1, 2, 3, 4, 4]
+        assert [column_count(h) for h in (0.5, 1.35, 2.0, 3.5, 5.0, 12.0)] == [1, 1, 2, 3, 4, 9]
         print("self-check ok: CSV parsing, comparison labels and schedule columns")
     else:
         run_in_revit()
