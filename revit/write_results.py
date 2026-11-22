@@ -405,6 +405,14 @@ def place_schedule(DB, doc, sheet, schedule):
     instances = [item for item in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.ScheduleSheetInstance)
                  if item.ScheduleId == schedule.Id]
     origin = DB.XYZ(0.09, 0.99, 0)
+    # Compact numeric columns leave room for two repeated headers on landscape sheets.
+    widths = {u"범주": 0.13, u"패밀리 및 유형": 0.32, u"폐기물 성상": 0.14,
+              u"부재 처리 방식": 0.15, u"중량(t)": 0.13, u"처리비(원)": 0.16,
+              u"매각수익(원)": 0.16}
+    for field_id in schedule.Definition.GetFieldOrder():
+        field = schedule.Definition.GetField(field_id)
+        if field.ColumnHeading in widths:
+            field.SheetColumnWidth = widths[field.ColumnHeading]
     width = sum(schedule.Definition.GetField(field).SheetColumnWidth
                 for field in schedule.Definition.GetFieldOrder()
                 if not schedule.Definition.GetField(field).IsHidden)
@@ -414,7 +422,7 @@ def place_schedule(DB, doc, sheet, schedule):
         instance.Point = origin
         doc.Regenerate()
         box = instance.get_BoundingBox(sheet)
-        if box is None or box.Max.Y - box.Min.Y <= 1.55:
+        if box is None or box.Max.Y - box.Min.Y <= 0.75:
             return [instance]
         with_split = DB.SubTransaction(doc)
         with_split.Start()
@@ -445,43 +453,84 @@ def place_schedule(DB, doc, sheet, schedule):
     return segments
 
 
+class SheetGrid(object):
+    def __init__(self, DB, doc, sheet, prefix):
+        self.DB, self.doc, self.sheet, self.prefix = DB, doc, sheet, prefix
+        self.types = {DB.Element.Name.GetValue(t): t for t in
+                      DB.FilteredElementCollector(doc).OfClass(DB.TextNoteType)}
+        lines = doc.Settings.Categories.get_Item(DB.BuiltInCategory.OST_Lines)
+        category = next((c for c in lines.SubCategories if c.Name == prefix), None)
+        if category is None:
+            category = doc.Settings.Categories.NewSubcategory(lines, prefix)
+        self.style = category.GetGraphicsStyle(DB.GraphicsStyleType.Projection)
+        for curve in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.CurveElement).ToElements():
+            if curve.LineStyle and curve.LineStyle.Id == self.style.Id:
+                doc.Delete(curve.Id)
+        for note in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote).ToElements():
+            if DB.Element.Name.GetValue(doc.GetElement(note.GetTypeId())).startswith(prefix + " "):
+                doc.Delete(note.Id)
+        self.edges = set()
+
+    def line(self, x1, y1, x2, y2):
+        edge = tuple(round(n, 8) for n in (x1, y1, x2, y2))
+        if edge not in self.edges:
+            DB = self.DB
+            curve = DB.Line.CreateBound(DB.XYZ(x1, y1, 0), DB.XYZ(x2, y2, 0))
+            self.doc.Create.NewDetailCurve(self.sheet, curve).LineStyle = self.style
+            self.edges.add(edge)
+
+    def text(self, x, y, value, size, bold, width):
+        DB = self.DB
+        key = "{} {} {}".format(self.prefix, size, int(bold))
+        if key not in self.types:
+            default = self.doc.GetDefaultElementTypeId(DB.ElementTypeGroup.TextNoteType)
+            style = self.doc.GetElement(default).Duplicate(key)
+            style.get_Parameter(DB.BuiltInParameter.TEXT_SIZE).Set(size / 304.8)
+            style.get_Parameter(DB.BuiltInParameter.TEXT_STYLE_BOLD).Set(int(bold))
+            self.types[key] = style
+        DB.TextNote.Create(self.doc, self.sheet.Id, DB.XYZ(x, y, 0), width,
+                           value, DB.TextNoteOptions(self.types[key].Id))
+
+    def row(self, left, right, top, cells, height=0.10):
+        bottom = top - height
+        self.line(left, top, right, top)
+        self.line(left, bottom, right, bottom)
+        self.line(left, bottom, left, top)
+        for end, value, size, bold in cells:
+            self.text(left + 0.018, top - 0.014, value, size, bold, end - left - 0.036)
+            self.line(end, bottom, end, top)
+            left = end
+
+
 def make_method_sheet(DB, doc, number, name, schedule, data, costs):
     sheet = get_reclaim_sheet(DB, doc, number, name)
     instances = place_schedule(DB, doc, sheet, schedule)
-    text = u"대상 IFC: {}".format(data["source"])
-    if costs:
-        text += u"\n건물 전체 처리비 {:,}원 / 매각수익 {:,}원".format(
-            costs["disposal"], costs["revenue"])
-    if number == "RC-02":
-        text += u"\n전면 분별 시나리오에서도 콘크리트 구조체 등은 압쇄 처리할 수 있습니다."
-    if number == "RC-03":
-        text += u"\n처리비·매각수익은 건물 전체 집계로 표시합니다."
-    title = name + u"\n"
-    notes = DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
-    note = next((n for n in notes if n.Text.startswith(name)), None)
-    if note is None:
-        style = doc.GetDefaultElementTypeId(DB.ElementTypeGroup.TextNoteType)
-        DB.TextNote.Create(doc, sheet.Id, DB.XYZ(0.09, 1.16, 0), title + text, style)
-    else:
-        note.Text = title + text
     doc.Regenerate()
-    boxes = [instance.get_BoundingBox(sheet) for instance in instances]
-    bottom = min([box.Min.Y for box in boxes if box is not None] or [instances[0].Point.Y])
-    footer_point = DB.XYZ(instances[0].Point.X, bottom - 0.04, 0)
-    footer_label = u"최종 합계 (건물 전체 순비용)"
+    boxes = [i.get_BoundingBox(sheet) for i in instances]
+    left = min(b.Min.X for b in boxes)
+    right = max(b.Max.X for b in boxes)
+    top = max(b.Max.Y for b in boxes) + 0.025
+    bottom = min(b.Min.Y for b in boxes) - 0.025
+    for note in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote).ToElements():
+        if (note.Text.startswith(name + u"\r") or note.Text.startswith(name + u"\n")
+                or note.Text.startswith(u"최종 합계 (건물 전체 순비용)")):
+            doc.Delete(note.Id)
+    grid = SheetGrid(DB, doc, sheet, "ReClaim Method")
+    middle = (left + right) / 2
+    grid.row(left, right, top + 0.49, [(right, name, 10, True)], 0.11)
+    grid.row(left, right, top + 0.38, [(left + 0.32, u"대상 IFC", 5, True),
+                                       (right, data["source"], 6, False)])
+    amounts = [u"{:,}원".format(costs[key]) if costs else u"자료 없음" for key in ("disposal", "revenue")]
+    grid.row(left, right, top + 0.28, [(middle, u"건물 전체 처리비", 5, True),
+                                       (right, u"건물 전체 매각수익", 5, True)], 0.08)
+    grid.row(left, right, top + 0.20, [(middle, amounts[0], 9, True),
+                                       (right, amounts[1], 9, True)])
+    scope = (u"전면 분별 시나리오에서도 콘크리트 구조체 등은 압쇄 처리할 수 있습니다."
+             if number == "RC-02" else u"처리비와 매각수익은 건물 전체 집계입니다.")
+    grid.row(left, right, top + 0.10, [(right, scope, 5.5, False)])
     net = data["selective_total_won" if number == "RC-02" else "crush_total_won"]
-    footer_text = u"{}    {:,} 원".format(footer_label, net)
-    footer = next((n for n in DB.FilteredElementCollector(doc, sheet.Id).OfClass(DB.TextNote)
-                   if n.Text.startswith(footer_label)), None)
-    if footer is None:
-        style = doc.GetDefaultElementTypeId(DB.ElementTypeGroup.TextNoteType)
-        footer = DB.TextNote.Create(doc, sheet.Id, footer_point, footer_text, style)
-    else:
-        footer.Text = footer_text
-        footer.Coord = footer_point
-    formatted = footer.GetFormattedText()
-    formatted.SetBoldStatus(DB.TextRange(0, len(footer_text)), True)
-    footer.SetFormattedText(formatted)
+    grid.row(left, right, bottom, [(middle, u"최종 합계 · 건물 전체 순비용", 7, True),
+                                   (right, u"{:,}원".format(net), 10, True)], 0.12)
     draw_sheet_border(DB, doc, sheet, data)
     return sheet
 
@@ -532,6 +581,7 @@ def draw_sheet_border(DB, doc, sheet, data):
     for element_id in old_ids:
         doc.Delete(element_id)
 
+    block = SheetGrid(DB, doc, sheet, "ReClaim Cartouche")
     title_style_name = "ReClaim Title Block"
     title_style = next((item for item in DB.FilteredElementCollector(doc).OfClass(DB.TextNoteType)
                         if DB.Element.Name.GetValue(item) == title_style_name), None)
@@ -564,7 +614,7 @@ def draw_sheet_border(DB, doc, sheet, data):
     band_top = min(box.Min.Y for box in boxes) - margin
     portrait = sheet.SheetNumber == "RC-01" or sheet.SheetNumber.startswith("RC-01-")
     ratio = 594.0 / 841.0 if portrait else 841.0 / 594.0
-    bottom = band_top - 0.32
+    bottom = band_top - 0.28
     width, height = right - left, top - bottom
     if width < height * ratio:
         extra = (height * ratio - width) / 2
@@ -593,24 +643,22 @@ def draw_sheet_border(DB, doc, sheet, data):
     for x in (logo_end, project_end, code_start):
         rule(x, bottom, x, band_top)
 
-    def label(x, depth, value, bold=False):
-        note = DB.TextNote.Create(doc, sheet.Id, DB.XYZ(x, band_top - depth, 0), value, title_style.Id)
-        if bold:
-            formatted = note.GetFormattedText()
-            formatted.SetBoldStatus(DB.TextRange(0, len(value)), True)
-            note.SetFormattedText(formatted)
-
-    place_sheet_image(DB, doc, sheet, base64.b64decode(TITLE_BLOCK_LOGO), "ReClaim_TitleLogo_", ".jpg",
-                      DB.XYZ((left + logo_end) / 2, band_top - 0.12, 0), 0.22)
-    label(left + 0.025, 0.23, u"https://mungim5556-ui.github.io/reclaim-compare/")
-    source = os.path.splitext(os.path.basename(data.get("source") or ""))[0] or doc.Title
-    label(logo_end + 0.025, 0.045, u"프로젝트 이름")
-    label(logo_end + 0.025, 0.13, source, True)
     heading = u"경제성 비교" if portrait else u"전면 분별" if sheet.SheetNumber.startswith("RC-02") else u"일괄 압쇄"
-    label(project_end + 0.025, 0.045, heading, True)
-    label(project_end + 0.025, 0.155, u"생성 일시 (KST)")
-    label(project_end + 0.025, 0.218, DateTime.UtcNow.AddHours(9).ToString("yyyy-MM-dd HH:mm:ss"))
-    label(code_start + 0.025, 0.10, sheet.SheetNumber, True)
+    source = os.path.splitext(os.path.basename(data.get("source") or ""))[0] or doc.Title
+    split = band_top - 0.18
+    rule(left, split, code_start, split)
+    rule(project_end, band_top - 0.08, code_start, band_top - 0.08)
+    def entry(x, end, y, value, size, bold=False):
+        block.text(x + 0.014, y - 0.012, value, size, bold, end - x - 0.028)
+    place_sheet_image(DB, doc, sheet, base64.b64decode(TITLE_BLOCK_LOGO), "ReClaim_TitleLogo_", ".jpg",
+                      DB.XYZ((left + logo_end) / 2, band_top - 0.09, 0), 0.18)
+    entry(left, logo_end, split, u"https://mungim5556-ui.github.io/reclaim-compare/", 4)
+    entry(logo_end, project_end, band_top, u"프로젝트 이름", 5)
+    entry(logo_end, project_end, split, source, 6, True)
+    entry(project_end, code_start, band_top, heading, 7, True)
+    entry(project_end, code_start, band_top - 0.08, u"생성 일시 (KST)", 4.5)
+    entry(project_end, code_start, split, DateTime.UtcNow.AddHours(9).ToString("yyyy-MM-dd HH:mm:ss"), 5)
+    entry(code_start, right, band_top - 0.075, sheet.SheetNumber, 9, True)
 
 
 def draw_comparison_layout(DB, doc, sheet, data, done, missing):
@@ -633,8 +681,8 @@ def draw_comparison_layout(DB, doc, sheet, data, done, missing):
         doc.Delete(element_id)
 
     styles = {}
-    for role, size, bold in (("Title", 8, True), ("Heading", 6, True), ("Body", 4.5, False),
-                             ("Table", 6, False), ("Amount", 7, True)):
+    for role, size, bold in (("Title", 10, True), ("Heading", 6, True), ("Body", 4.5, False),
+                             ("Table", 7, False), ("Amount", 8, True)):
         name = prefix + role
         style = next((item for item in DB.FilteredElementCollector(doc).OfClass(DB.TextNoteType)
                       if DB.Element.Name.GetValue(item) == name), None)
@@ -663,12 +711,16 @@ def draw_comparison_layout(DB, doc, sheet, data, done, missing):
             options.HorizontalAlignment = DB.HorizontalTextAlignment.Right
         DB.TextNote.Create(doc, sheet.Id, DB.XYZ(x, y, 0), value, options)
 
-    text(0.10, 1.72, u"RC-01  해체 공법 경제성 비교", "Title")
+    text(0.135, 2.43, u"RC-01  해체 공법 경제성 비교", "Title")
     area = data.get("area_m2")
     area_text = u"{:,.1f} m\u00b2".format(float(area)) if area else u"미입력"
-    text(0.10, 1.59, u"{}  ·  연면적 {}".format(data.get("source") or u"IFC 모델", area_text))
-    frame(0.10, 1.10, 1.48, 0.73, u"순비용 비교")
-    frame(1.15, 1.90, 1.48, 0.73, u"해체 대상 3D")
+    text(0.135, 2.31, u"{}  ·  연면적 {}".format(data.get("source") or u"IFC 모델", area_text))
+    for y in (2.46, 2.34, 2.24):
+        rule(0.10, y, 1.90, y)
+    for x in (0.10, 1.90):
+        rule(x, 2.24, x, 2.46)
+    frame(0.10, 1.90, 2.21, 1.46, u"순비용 비교")
+    frame(0.10, 1.90, 1.43, 0.71, u"해체 대상 3D")
     frame(0.10, 1.90, 0.68, 0.13, u"공법별 비용 구성")
 
     rows = (
@@ -680,15 +732,16 @@ def draw_comparison_layout(DB, doc, sheet, data, done, missing):
         (u"비교 결과", recommended_method(data)),
     )
     for index, (label, value) in enumerate(rows):
-        y = 1.39 - index * 0.087
+        y = 2.12 - index * 0.087
         role = "Heading" if index in (0, 5) else "Table"
         value_role = "Amount" if index in (1, 2, 3) else role
         text(0.135, y - 0.022, label, role)
-        text(1.065, y - 0.022, value, value_role, right=True)
-        rule(0.10, y - 0.087, 1.10, y - 0.087)
-    rule(0.65, 1.39, 0.65, 1.39 - len(rows) * 0.087)
-    text(0.135, 0.842, u"부재 {}개 기록 · 매칭 또는 기록 실패 {}개".format(done, missing))
-    text(0.135, 0.788, u"부재별 결과는 RC-02 및 RC-03 참조")
+        text(1.865, y - 0.022, value, value_role, right=True)
+        rule(0.10, y - 0.087, 1.90, y - 0.087)
+    rule(1.0, 2.12, 1.0, 2.12 - len(rows) * 0.087)
+    text(0.135, 1.584, u"부재 {}개 기록 · 매칭 또는 기록 실패 {}개".format(done, missing))
+    rule(0.10, 1.53, 1.90, 1.53)
+    text(0.135, 1.52, u"부재별 결과는 RC-02 및 RC-03 참조")
     if data.get("unpriced_concrete_cut") or any((data.get("unpriced_disposal") or {}).values()):
         text(0.10, 0.105, u"일부 항목은 미산정 상태입니다.")
     if not data.get("cost_chart_png"):
@@ -716,7 +769,7 @@ def make_comparison_sheet(DB, doc, data, parameters, run_id, done, missing):
     view.DisplayStyle = DB.DisplayStyle.ShadingWithEdges
     viewport = next((doc.GetElement(vid) for vid in sheet.GetAllViewports()
                      if doc.GetElement(vid).ViewId == view.Id), None)
-    center = DB.XYZ(1.525, 1.035, 0)
+    center = DB.XYZ(1.0, 1.025, 0)
     if viewport is None:
         if not DB.Viewport.CanAddViewToSheet(doc, sheet.Id, view.Id):
             raise ValueError(u"해체 대상 3D 뷰가 다른 시트에 배치되어 있습니다.")
@@ -735,7 +788,7 @@ def make_comparison_sheet(DB, doc, data, parameters, run_id, done, missing):
     doc.Regenerate()
     outline = viewport.GetBoxOutline()
     size = outline.MaximumPoint - outline.MinimumPoint
-    ratio = max(size.X / 0.63, size.Y / 0.48)
+    ratio = max(size.X / 1.65, size.Y / 0.48)
     if ratio > 1 or ratio < 0.75:
         view.Scale = max(1, int(ceil(view.Scale * ratio)))
         doc.Regenerate()
