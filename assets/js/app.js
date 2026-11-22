@@ -1058,7 +1058,7 @@ function validationTab(d) {
 function summary(d) {
   const { crush, selective, delta, deltaDays } = d.cmp;
   sim ||= simulate(d.q, state.p, variables(rates), { n: 5000, seed: state.seed });
-  return { source: state.source === "ifc" ? state.fileName : "area", area_m2: state.area, usage: state.usage, site: state.site, labor_method: d.q.labor,
+  return { revit_sheet_style: "readable-v1", source: state.source === "ifc" ? state.fileName : "area", area_m2: state.area, usage: state.usage, site: state.site, labor_method: d.q.labor,
     window_mode: d.q.windowMode ?? null, window_assumption: d.q.windowMode === "both" ? WINDOW_ASSUMPTION : null, window_glass_pd_per_m2: d.q.windowMode ? d.q.glassPdPerM2 ?? state.p.window_frame_pd_per_m2 : null, frame_tons: { aluminum: d.q.alFrameTons ?? null, pvc: d.q.pvcFrameTons ?? null }, input_quantities: streamTons(d.q, state.p).t, rebar_estimated_t: streamTons(d.q, state.p).rebar, project_inputs: { ...projectInputs(), equipment: d.q.equipment, labor: d.q.labor, finishBaseline: d.q.finishBaseline }, estimation_assumptions: Object.fromEntries(estimateAssumptions(d.q,state.p)), finish_areas_m2: d.q.finishAreas, applied_rates: state.p,
     office_material_salvage_reference: officeSalvageReference(d.q, state.p),
     transport_input: { crush: crush.transportQuote ?? null, selective: selective.transportQuote ?? null },
