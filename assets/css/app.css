@@ -1,71 +1,24 @@
-/* Personal site palette */
-:root:root {
-  color-scheme: dark;
-  --bg: #15171b;
-  --surface: #1e2127;
-  --surface-2: #252931;
-  --border: #353a44;
-  --text: #d9dde5;
-  --text-muted: #aab2bf;
-  --color-primary: #9eafd0;
-  --color-primary-strong: #475c82;
-  --color-primary-soft: #2d3749;
-  --accent-ink: #c1cde2;
-  --color-secondary: #43566a;
-  --color-secondary-soft: #2b3644;
-  --color-info: #b0c2da;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 18px;
-  --shadow-sm: 0 2px 5px rgb(0 0 0 / 12%);
-  --s1: #7597b7;
-  --s2: #a58bbd;
-  --s3: #68a9aa;
-  --s4: #c1a171;
-  --s6: #9eaf87;
-}
-a, .btn-ghost, .badge-primary { color: var(--accent-ink); }
-.btn-primary:hover { background: #536b96; }
-.btn-secondary { color: #e4e8ef; }
-.badge-info { color: var(--color-info); }
+/* 차트 계열 색 (dataviz 기본 팔레트: 파랑·주황·청록·노랑·초록). 다크 모드는 따로 고른 단계 */
+:root { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s6: #008300; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; } }
 
-.top {
-  position: sticky; top: 0; z-index: 5;
-  background: var(--surface); border-bottom: 1px solid var(--border);
-  padding: 12px max(24px, calc((100% - 1240px) / 2));
-  display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between;
-}
-.brand { display: grid; gap: 1px; position: relative; padding-left: 15px; }
-.brand::before {
-  content: ""; position: absolute; inset: 3px auto 3px 0; width: 3px;
-  border-radius: 4px; background: var(--color-primary);
-}
-.brand strong { font-family: var(--font-display); font-size: 18px; letter-spacing: -.035em; }
-.brand span { font-size: 12px; }
-.tabs { display: flex; gap: 4px; max-width: 100%; flex-wrap: wrap; }
-.tabs button {
-  background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
-  padding: 7px 11px; min-height: 38px; font-size: 13px; font-weight: 600;
-  color: var(--text-muted); cursor: pointer;
-}
-.tabs button:hover { background: var(--surface-2); }
-.tabs button[aria-current] { color: var(--accent-ink); background: var(--color-primary-soft); }
-.tabs button span {
-  display: inline-grid; place-items: center; width: 19px; height: 19px;
-  border-radius: 5px; background: var(--surface-2); font-size: 11px; margin-right: 5px;
-}
-.tabs button[aria-current] span { color: var(--surface); background: var(--accent-ink); }
+.top { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 24px 0; display: flex; flex-wrap: wrap; gap: 8px 32px; align-items: flex-end; justify-content: space-between; }
+.brand { display: flex; flex-direction: column; padding-bottom: 12px; }
+.brand strong { font-family: var(--font-display); font-size: 18px; }
+.brand span { font-size: 13px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; }
+.tabs button { background: none; border: 0; border-bottom: 3px solid transparent; padding: 10px 14px; font-weight: 600; color: var(--text-muted); cursor: pointer; }
+.tabs button[aria-current] { color: var(--text); border-color: var(--color-primary); }
+.tabs button span { display: inline-block; width: 22px; height: 22px; line-height: 22px; text-align: center; border-radius: 50%; background: var(--surface-2); font-size: 12px; margin-right: 6px; }
 
-.page { max-width: 1176px; margin: 0 auto; padding: 36px 24px 80px; display: flex; flex-direction: column; gap: 20px; }
+.page { max-width: 1120px; margin: 0 auto; padding: 28px 24px 80px; display: flex; flex-direction: column; gap: 20px; }
 .page > * { min-width: 0; }
-.page h1 { font-size: clamp(27px, 3vw, 34px); letter-spacing: -.045em; }
-.page h1 + .lead { margin-top: 5px; }
+.page h1 { font-size: 26px; }
 .page h2 { font-size: 18px; margin-bottom: 12px; }
 .lead { color: var(--text-muted); max-width: 70ch; }
 .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 20px; }
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
-.kpi { min-width: 0; background: linear-gradient(160deg, var(--surface), var(--surface-2)); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
 .kpi .v { font-family: var(--font-display); font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
 .kpi .l { font-size: 13px; color: var(--text-muted); }
 .kpi .s { font-size: 13px; margin-top: 4px; }
@@ -89,7 +42,7 @@ svg text { fill: var(--text); font-family: var(--font-sans); }
 .c-zero { stroke: var(--text); stroke-width: 1.5; stroke-dasharray: 4 3; }
 svg rect[data-tip]:hover { filter: brightness(1.12); }
 .tip { position: fixed; z-index: 20; pointer-events: none; background: var(--gray-900); color: #fff; font-size: 13px; padding: 6px 10px; border-radius: 6px; max-width: 320px; box-shadow: var(--shadow-md); }
-.drop { background: var(--surface-2); border: 2px dashed var(--border); border-radius: var(--radius-lg); padding: 28px; text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.drop { border: 2px dashed var(--border); border-radius: var(--radius-lg); padding: 28px; text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .drop.over { border-color: var(--color-primary); background: var(--color-primary-soft); }
 details summary { cursor: pointer; font-weight: 600; }
 @media (max-width: 640px) {
@@ -105,7 +58,6 @@ details summary { cursor: pointer; font-weight: 600; }
   .drop .btn { white-space: normal; }
 }
 @media print {
-  :root:root { color-scheme: light; }
   .top, .no-print, .tip { display: none !important; }
   .page { padding: 0; max-width: none; }
   .card { box-shadow: none; break-inside: avoid; }
