@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ifcServiceKind, ifcServiceMass, lengthScale, openingArea } from "../assets/js/ifc.js";
+import { ifcBuildingUse, ifcServiceKind, ifcServiceMass, lengthScale, openingArea } from "../assets/js/ifc.js";
 
 // web-ifc가 GetLine(..., true)로 펼친 IfcUnitAssignment.Units와 같은 모양
 const si = (prefix) => ({ UnitType: { value: "LENGTHUNIT" }, Prefix: prefix ? { value: prefix } : null, Name: { value: "METRE" } });
@@ -16,6 +16,15 @@ test("IFC 길이 단위: m는 1, mm는 0.001, 인치·피트는 환산 배율", 
   const inchInMm = { UnitType: { value: "LENGTHUNIT" }, ConversionFactor: { ValueComponent: { value: 25.4 }, UnitComponent: si("MILLI") } };
   assert.ok(Math.abs(lengthScale([inchInMm]) - 0.0254) < 1e-12);
   assert.equal(lengthScale([]), 1); // 단위 정보가 없으면 m로 본다
+});
+
+test("IFC 용도와 면적 추정 적용 범위를 모델 안의 정보로 판단한다", () => {
+  assert.deepEqual(ifcBuildingUse("Building", "", ""), { usage: null, serviceAreaExcluded: false });
+  assert.deepEqual(ifcBuildingUse("아파트, 지하층 포함", "", ""), { usage: "공동주택", serviceAreaExcluded: false });
+  assert.deepEqual(ifcBuildingUse("Building", "", "사무용 건축물 지하층"), { usage: "비주거 RC", serviceAreaExcluded: true });
+  assert.deepEqual(ifcBuildingUse("Building", "", "공장"), { usage: "비주거 RC", serviceAreaExcluded: true });
+  assert.deepEqual(ifcBuildingUse("단독주택 및 축사", "", ""), { usage: "단독주택", serviceAreaExcluded: true });
+  assert.deepEqual(ifcBuildingUse("Building", "Sample Apartment", ""), { usage: "공동주택", serviceAreaExcluded: false });
 });
 
 test("동관과 피복전선은 설비 종류와 재료 근거가 맞을 때 구분한다", () => {

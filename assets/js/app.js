@@ -4,7 +4,7 @@ import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validat
 import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js?v=service-recovery-20261123";
 import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=service-recovery-20261123";
 import { COST_PARTS, REVENUE_COLOR, stackedBars, tornadoChart, histChart, legend, mil, num, formatCostDifference } from "./charts.js?v=cost-units-20261123";
-import { ifcScopeElements } from "./ifc.js?v=service-recovery-20261123";
+import { ifcBuildingUse, ifcScopeElements } from "./ifc.js?v=ifc-content-20261123";
 import { reportHtml, kstStamp, fitSchedules } from "./report.js?v=cost-units-20261123";
 import { identifyIfcServices, ifcServiceInventory, serviceItems, serviceSalvage } from "./service-salvage.js?v=service-recovery-20261123";
 import { concreteCutCandidates } from "./concrete-cut.js?v=equipment-compare-20261123";
@@ -101,7 +101,7 @@ const uploadedPlanScopes = {
   "751394708fd409fd752605514aabf4e49b1eac1b3a337d3a71aa8cdf334dcc97": { caseFile: "05-office-above.json" },
   "38391477cec44a75adc05399b68c22e76cea1ab49a35f5a340804cc42d0081cc": { caseFile: "06-office-below.json" },
   "3978b62f946ea890f42872a89f95d2a280da1473ebf45aaa013174f756022fc3": { area: 102.3, scope: "above", usage: "비주거 RC" }, // 노량진 지상 해체 범위
-  db1384a717b94437e38e4d544447fc94f7dd76d0835ea30d19ba6d3e6aba3073: { area: 23191.57, usage: "비주거 철골", finishFallbackDisabled: true,
+  db1384a717b94437e38e4d544447fc94f7dd76d0835ea30d19ba6d3e6aba3073: { area: 23191.57, usage: "비주거 철골", finishFallbackDisabled: true, serviceAreaExcluded: true,
     planReference: {
       wasteTons: { concrete: 25000, mixed: 100, wood: 150, resin: 10 },
       wasteScope: "주1동·부속동 포함 범위 미확인",
@@ -174,9 +174,10 @@ function derive() {
   } else q = { ...quantitiesFromArea(state.area, state.usage, rates), added: {} };
   Object.assign(q, projectInputs(), { fixedComparison: true, officeRecovery: officeRecoveryEnabled() });
   q.serviceInventory = ifcServiceInventory(scopedServices);
-  const atypicalServices = /공장|창고|축사|차양막|철탑|지하층|지하부|\bfactory\b|\bwarehouse\b|\bbasement\b/i
-    .test(`${state.fileName} ${state.model?.usage ?? ""}`);
-  if (state.estimateServiceArea !== false && !openSteelFrame && !atypicalServices && !["below", "partial"].includes(q.scope)) {
+  const planBuilding = state.reference?.plan?.building;
+  const planUse = ifcBuildingUse(`${planBuilding?.usage ?? ""} ${planBuilding?.name ?? ""}`, "", "");
+  const serviceAreaExcluded = state.model?.serviceAreaExcluded || state.uploadedPlanScope?.serviceAreaExcluded || planUse.serviceAreaExcluded;
+  if (state.estimateServiceArea !== false && !openSteelFrame && !serviceAreaExcluded && !["below", "partial"].includes(q.scope)) {
     q.serviceProfile = /^(단독|공동)주택$/.test(state.usage) ? "home" : "nonres";
   }
   const cutCandidates = state.source === "ifc" && !openSteelFrame ? concreteCutCandidates(classified, state.model, state.scope) : [];
@@ -410,19 +411,11 @@ function usesBasement(scope, model) {
 }
 
 let loadVersion = 0;
-function inferIfcUsage(modelUsage, filename) {
-  if (modelUsage) return modelUsage;
-  if (/공동주택|다가구|다세대|연립|아파트|빌라/.test(filename)) return "공동주택";
-  if (/관사|단독/.test(filename)) return "단독주택";
-  if (/학교|교사동|어린이집|상가|업무시설|사무실|사무동|사무용/.test(filename)) return "비주거 RC";
-  return /주택/.test(filename) ? "단독주택" : "공동주택";
-}
-
 async function loadIfc(buffer, name, area, plan = null, conditions = null, planExample = null) {
   const version = ++loadVersion;
   state.busy = "IFC를 읽는 중입니다…"; state.error = ""; state.formError = ""; render();
   try {
-    const { parseIfc } = await import("./ifc.js?v=service-recovery-20261123");
+    const { parseIfc } = await import("./ifc.js?v=ifc-content-20261123");
     const model = await parseIfc(buffer);
     if (!model.elements.some(e => e.category !== "other" && e.volume > 0)) throw new Error("비용 산정에 사용할 건축 부재 물량을 찾지 못했습니다.");
     const digest = globalThis.crypto?.subtle ? await sha256(buffer) : null;
@@ -468,7 +461,9 @@ async function loadIfc(buffer, name, area, plan = null, conditions = null, planE
       areaConfirmed: Boolean(resolvedArea),
       area: resolvedArea || Math.round((detectedArea.area || model.gross.area) * 100) / 100,
       floors: initialScope === "below" ? 0 : (Number.isInteger(b?.floors_above) && b.floors_above >= 0 ? b.floors_above : model.aboveFloors ?? model.floors) });
-    Object.assign(state, { ...defaultSiteInputs, scope: initialScope, structure: plan ? "unknown" : defaultSiteInputs.structure, height: b?.height_m ?? model.aboveHeight_m, usage: b?.wasteUnit in rates.wasteUnits ? b.wasteUnit : inferIfcUsage(model.usage, name),
+    const usage = b?.wasteUnit in rates.wasteUnits ? b.wasteUnit
+      : ifcBuildingUse(b?.usage, b?.name).usage ?? model.usage ?? "공동주택";
+    Object.assign(state, { ...defaultSiteInputs, scope: initialScope, structure: plan ? "unknown" : defaultSiteInputs.structure, height: b?.height_m ?? model.aboveHeight_m, usage,
       labor: "quantity", supplement: false, seed: 1, useCalibration: false, calibrationType: "plan" },
       // 계획서의 현장·장비 조건은, 이 기능 이전에 저장된 값(기본값 "보통")보다 우선한다. 이후 사용자가 고친 값은 유지한다.
       conditions?.values, previousInputs,

@@ -392,6 +392,20 @@ export function normalizeHollowProfilePositions(bytes) {
   return new TextEncoder().encode(data + extra + source.slice(insertion));
 }
 
+export function ifcBuildingUse(building, project, survey) {
+  function usageOf(text) {
+    if (/아파트|공동주택|다가구|다세대|연립주택|빌라|\bapartment\b|\bmulti[- ]family\b/i.test(text)) return "공동주택";
+    if (/단독|관사|\bsingle[- ]family\b/i.test(text)) return "단독주택";
+    if (/학교|교사동|교육연구시설|어린이집|유아원|상가|근린생활시설|업무시설|사무실|사무동|사무용|공장|창고|\b(?:offices?|schools?|retail|factory|warehouse)\b/i.test(text)) return "비주거 RC";
+    return /주택/.test(text) ? "단독주택" : null;
+  }
+  const location = [building, survey, project].filter(Boolean);
+  const usage = location.map(usageOf).find(Boolean) ?? null;
+  const serviceAreaExcluded = location.some(text => /공장|창고|축사|차양막|철탑|\b(?:factory|warehouse)\b/i.test(text))
+    || /지하층|지하부|\bbasement\b/i.test(survey);
+  return { usage, serviceAreaExcluded };
+}
+
 export async function parseIfc(buffer) {
   const W = await import(CDN + "web-ifc-api.js");
   const api = new W.IfcAPI();
@@ -597,12 +611,23 @@ export async function parseIfc(buffer) {
     // 층수: 부재가 실제로 들어 있는 층만 센다 (Revit의 기준 레벨·지붕 레벨 제외)
     const used = new Set(elements.filter((e) => e.category !== "footing").map((e) => e.floor));
     const floors = used.size || storeys.length || 1;
-    const buildings = ids(W.IFCBUILDING).map(id => api.GetLine(model,id));
-    const description = buildings.flatMap(b => [b.Name, b.LongName, b.ObjectType, b.Description]).map(v => v?.value || "").join(" ");
-    const usage = /아파트|공동주택|apartment/i.test(description) ? "공동주택"
-      : /단독주택|single.family/i.test(description) ? "단독주택" : null;
+    const describe = type => ids(type).map(id => read(id))
+      .flatMap(item => [item.Name, item.LongName, item.ObjectType, item.Description]).map(value => value?.value || "").join(" ");
+    // Survey exports can have generic building names and carry the scope in the source title.
+    let survey = "";
+    for (const id of ids(W.IFCPROPERTYSET)) {
+      const properties = read(id);
+      if (properties.Name?.value !== "Pset_SurveyEvidence") continue;
+      const source = (properties.HasProperties ?? []).map(ref => read(ref.value)).find(prop => prop.Name?.value === "Source");
+      const title = source?.NominalValue?.value;
+      if (typeof title === "string" && title.trim()) {
+        survey = title.split(" - ")[0].trim();
+        break;
+      }
+    }
+    const buildingUse = ifcBuildingUse(describe(W.IFCBUILDING), describe(W.IFCPROJECT), survey);
     const services = ifcServices({ types: W, read, ids, typeOf, serviceTypes, serviceData, unitDefaults, parentOf, matOf, floorOf, storeys });
-    return { meshes, elements, services, size, floors, ...scopeGeometry(elements, size, storeys), usage, lengthScale: scale, gross: grossArea(elements, size, floors),
+    return { meshes, elements, services, size, floors, ...scopeGeometry(elements, size, storeys), ...buildingUse, lengthScale: scale, gross: grossArea(elements, size, floors),
       volumeCheck: volumeCheck(elements) };
   } finally {
     api.CloseModel(model);
