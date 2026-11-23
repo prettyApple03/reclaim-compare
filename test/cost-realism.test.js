@@ -61,11 +61,16 @@ test("비RC 콘크리트에는 추정 철근을 만들지 않는다", () => {
   assert.equal(rebarTons({ concrete_m3: 100 }, 100), 10); // Legacy explicit quantity API remains supported.
 });
 
-test("설비 추정수익은 회수비 미확인시 잠재수익이며 도급비 확인 후 합계에 반영한다", () => {
+test("선택한 설비 추정 매출은 한 번 반영하고 견적이 없으면 회수비를 확인 대상으로 남긴다", () => {
   const q = { ...base, area_m2: 1000, officeRecovery: true, fixedComparison: true };
   const c = compare(q, p);
-  near(c.selective.revenue, 0);
-  near(c.crush.revenue, 0);
+  for (const result of [c.selective, c.crush]) {
+    near(result.revenue, result.potentialRevenue.total);
+    near(result.revenue, -result.rows.filter(row => row.group === "매각수익").reduce((sum, row) => sum + row.amount, 0));
+    assert.equal(result.potentialRevenue.included, true);
+    assert.equal(result.potentialRevenue.recoveryCostKnown, false);
+    near(result.potentialRevenue.unbooked, 0);
+  }
   near(c.selective.potentialRevenue.total - c.crush.potentialRevenue.total, 781200);
   assert.equal(c.recommended, null);
   assert.ok(c.completeness.missing.some(row => row.code === "recovery-work"));
@@ -73,6 +78,21 @@ test("설비 추정수익은 회수비 미확인시 잠재수익이며 도급비
   near(priced.selective.equipment - c.selective.equipment, 1500000);
   near(priced.selective.revenue, c.selective.potentialRevenue.total);
   near(priced.selective.days - c.selective.days, 2);
+  const free = compare({ ...q, recoveryCostCommon: 0 }, p);
+  assert.equal(free.selective.potentialRevenue.recoveryCostKnown, true);
+  assert.ok(!free.completeness.missing.some(row => row.code === "recovery-work"));
+});
+
+test("현장 설치량 추정에서 한 공법의 별도 계근값·0원이 다른 공법 수익을 지우지 않는다", () => {
+  const q = { ...base, fixedComparison: true, pipeInstalled: 0.5, cableInstalled: 1, cableCrush: 0, cablePrice: 100000 };
+  const c = compare(q, p);
+  near(c.crush.potentialRevenue.pipeKg, 347.5);
+  near(c.crush.potentialRevenue.cableKg, 0);
+  near(c.selective.potentialRevenue.cableKg, 875);
+  near(c.selective.revenue - c.crush.revenue, 87500);
+  const confirmed = compare({ ...q, copperPipeSold: 0, cableSel: 0.25 }, p);
+  near(confirmed.selective.revenue, 25000);
+  near(confirmed.selective.potentialRevenue.total, 0);
 });
 
 test("자동 창호 모드도 현장 확인 공법별 회수율을 존중한다", () => {

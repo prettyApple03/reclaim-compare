@@ -339,6 +339,8 @@ export async function parseIfc(buffer) {
         floor: category === "footing" ? 0 : floorOf.get(id) || 1,
         ...(({ volume, source, diff }) => ({ volume, volumeSource: source, meshVolume: a.volume, volumeDiff: diff }))(pickVolume(a.volume, volumes.get(id)?.m3)),
         weightTons: weights.get(id)?.tons,
+        hasNetWeight: (weights.get(id)?.priority ?? -1) >= 2,
+        hasNetVolume: volumes.get(id)?.priority === 2,
         area: openingArea(w, h, a.surface), floorFootprint: a.floorFootprint > 0 ? a.floorFootprint : undefined,
         layers: matOf.get(id) || matOf.get(typeOf.get(id)) || [],
       };

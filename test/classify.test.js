@@ -60,11 +60,41 @@ test("사용자 지정 성상이 우선한다", () => {
   assert.equal(classify(e, rates, { [groupKey(e)]: "wood" }).stream, "wood");
 });
 
+test("IFC 순구리 매각량을 부재에 귀속하고, 동관 현장값은 식별된 동판을 유지한다", () => {
+  const list = [
+    classify(el("plate", [{ name: "Copper sheet", thickness: 0 }], 0.01), rates),
+    classify({ ...el("pipe", [{ name: "Copper pipe", thickness: 0 }]), hasNetWeight: true, weightTons: 0.1 }, rates),
+    classify(el("pipe", [{ name: "Copper pipe", thickness: 0 }], 5), rates),
+    classify(el("plate", [{ name: "Copper cable", thickness: 0 }]), rates),
+    classify(el("plate", [{ name: "황동", thickness: 0 }]), rates),
+  ];
+  const q = { ...quantitiesFromElements(list, 100), fixedComparison: true, floors: 1 };
+  const p = paramValues(rates);
+  near(q.salvageCopperTons, 0.189);
+  near(q.separateCopperTons, 0.089);
+  for (const mode of ["crush","selective"]) {
+    const rate = mode === "selective" ? p.rec_copper_sel : p.rec_copper_crush;
+    const r = costScenario(q, p, mode);
+    near(r.sold.copper, q.salvageCopperTons * rate);
+    const modeled = elementResults(list,p,0,q,mode,r);
+    near(modeled.reduce((sum,row) => sum + row.revenue,0), r.revenue);
+    assert.deepEqual(modeled.slice(2).map(row => row.revenue), [0,0,0]);
+    const received = { ...q, copperPipeSold:0.08 };
+    const actual = costScenario(received,p,mode);
+    near(actual.sold.copper, 0.089 * rate + 0.08);
+    near(actual.unsoldMetal, 0.189 - actual.sold.copper);
+    const rows = elementResults(list,p,0,received,mode,actual);
+    near(actual.revenue - rows.reduce((sum,row) => sum + row.revenue,0), 80 * p.price_copper_pipe);
+    const zero = costScenario({ ...q, copperPipeSold:0 },p,mode);
+    near(zero.sold.copper, 0.089 * rate);
+  }
+});
+
 test("물량 합산, 원단위 보충, 부재별 결과 CSV", () => {
   const list = [
     classify(el("slab", [{ name: "Reinforced Concrete", thickness: 0 }], 100), rates),
     classify(el("covering", [{ name: "Plywood", thickness: 0 }], 0.5), rates),
-    classify(el("pipe", [{ name: "Copper Pipe", thickness: 0 }], 0.01), rates),
+    classify({ ...el("pipe", [{ name: "Copper Pipe", thickness: 0 }], 0.01), hasNetVolume: true }, rates),
   ];
   const q = quantitiesFromElements(list, 1000);
   near(q.concrete_m3, 100); near(q.t.concrete, 240); near(q.t.wood, 0.3); near(q.t.copper, 0.089);

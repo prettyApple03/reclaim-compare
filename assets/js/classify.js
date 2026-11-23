@@ -1,5 +1,6 @@
 // IFC 부재(종류·재료 층·부피·면적) → 폐기물 성상별 톤수. DOM·web-ifc를 쓰지 않는다.
-import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js?v=field-20261123";
+import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js?v=salvage-20261123";
+import { hasRebarDesignation, isPlanRebarMember, nonRebarConcrete } from "./rebar-evidence.js?v=salvage-20261123";
 
 export const CATEGORY_LABEL = {
   wall: "벽", slab: "슬래브", beam: "보", column: "기둥", footing: "기초", stair: "계단", roof: "지붕",
@@ -20,18 +21,22 @@ const MATERIALS = [
   ["board", "board", /gypsum|석고|plasterboard|drywall|보드|board|텍스/i],
   ["glass", "glass", /glass|유리|glaz/i],
   ["aluminum", "aluminum", /alumin|알루미늄|샤시|sash/i],
-  ["copper", "copper", /copper|구리|동관|동판|brass|황동/i],
+  ["unsortedNonferrous", "mixed", /brass|bronze|황동|청동|구리\s*합금|copper[ -]?(?:alloy|plated|clad)|동도금|동박적층|구리\s*도금/i],
+  ["copper", "copper", /copper|구리|동관|동판|순동/i],
   ["resin", "resin", /pvc|염화비닐|비닐|vinyl|plastic|플라스틱|polymer|폴리|합성수지|아크릴|acrylic|장판|linoleum|리놀륨|epoxy|에폭시|carpet|카펫|벽지|wallpaper|rubber|고무|asphalt|아스팔트|방수|습기\s*차단|방습|waterproof|membrane|bitumen/i],
   ["wood", "wood", /wood|timber|plywood|목재|합판|마루|lumber|mdf|oak|pine|각재|떡갈나무|벚나무|소나무|장선|서까래|joist|rafter/i],
   ["metal", "metal", /steel|강철|스틸|스테인리스|stainless|금속|강재|철골|철근|rebar|강관|강봉|형강|강판|철판|\bSTK[MNR]?\s*\d|iron|metal|\bSS\d|\bSM\d|SHN|H-?beam|stud|galvan|zinc|징크|아연/i],
   ["tile", "tile", /tile|타일|ceramic|도기/i],
-  ["masonry", "masonry", /brick|block|masonry|조적|벽돌|블록|cmu|stone|석재|화강|granite|대리석|marble|석회석|limestone|사암|sandstone/i],
+  ["masonry", "masonry", /brick|block|masonry|조적|벽돌|블[록럭]|cmu|stone|석재|화강|granite|대리석|marble|석회석|limestone|사암|sandstone/i],
   ["mixed", "mixed", /plaster|플라스터|회반죽|paint|도장/i],
   ["concrete", "concrete", /concrete|콘크리트|\brc\b|cast|mortar|모르타르|screed|cement|시멘트/i],
 ];
 const STRUCTURAL = new Set(["wall", "slab", "beam", "column", "footing", "stair", "roof"]);
 const streamOf = (cls) => MATERIALS.find((m) => m[0] === cls)?.[1] || cls;
-const reinforcedName = /철근\s*콘크리트|보강\s*콘크리트|reinforced\s*concrete|\bRC\b/i;
+const rebarCandidate = (el, part) => part.stream === "concrete" && !part.reinforced
+  && (STRUCTURAL.has(el.category) || el.category === "other")
+  && part.manualInput?.reinforced !== false
+  && !nonRebarConcrete.test(el.name ?? "") && !nonRebarConcrete.test(part.layer ?? "");
 const framingName = /장선|서까래|joist|rafter|\bstud\b|framing/i;
 const applianceName = /냉장고|보일러|세척기|세탁기|쿡탑|간이\s*부엌|싱크대|변기|욕조|화장실-가정용|refrigerator|boiler|dishwasher|washing\s*machine|cooktop|kitchenette|toilet|bathtub|\bsink\b/i;
 
@@ -58,7 +63,7 @@ export function classify(el, rates, overrides = {}, unknownFrame = "aluminum", o
   let guessed = false, guessedConcreteTread = false;
   const quantityIssues = [];
   const push = (cls, m3, tons, info = {}) => {
-    const density = info.density ?? (["mineralInsulation", "unknownInsulation", "cementBoard", "unknown"].includes(cls) ? D[cls] : D[cls] ?? D[streamOf(cls)]);
+    const density = info.density ?? (["mineralInsulation", "unknownInsulation", "cementBoard", "unknown", "unsortedNonferrous"].includes(cls) ? D[cls] : D[cls] ?? D[streamOf(cls)]);
     const unresolved = tons == null && (!(density >= 0) || info.unresolved);
     const part = { cls, stream: cls === "unknown" ? "mixed" : streamOf(cls), m3,
       tons: tons ?? (unresolved ? 0 : m3 * density),
@@ -106,7 +111,7 @@ export function classify(el, rates, overrides = {}, unknownFrame = "aluminum", o
         const fraction = l.framingFraction ?? el.framingFraction;
         const framingVerified = Number.isFinite(fraction) && fraction > 0 && fraction <= 1;
         const part = push(l.cls || "unknown", cavity && framingVerified ? m3 * fraction : m3, undefined, {
-          layer: l.name || l.category || "재료 없음", reinforced: l.cls === "concrete" && reinforcedName.test(l.name + " " + l.category),
+          layer: l.name || l.category || "재료 없음", reinforced: l.cls === "concrete" && hasRebarDesignation(l.name + " " + l.category),
           unresolved: cavity && !framingVerified,
           reason: cavity && !framingVerified ? "목구조 층의 실재적 비율 미확인" : !l.cls ? "재료 미확인" : /Insulation/i.test(l.cls) ? "해당 단열재 밀도 미확인" : undefined,
           framingEnvelope_m3: cavity ? m3 : undefined, framingFraction: cavity && framingVerified ? fraction : undefined,
@@ -116,21 +121,28 @@ export function classify(el, rates, overrides = {}, unknownFrame = "aluminum", o
       }
     } else {
       const constituents = new Set(named.map(l => l.cls).filter(Boolean));
+      const planMember = isPlanRebarMember(el, options.rebarEvidence) && (named.length === 1
+        && named[0].cls === "concrete" && !nonRebarConcrete.test([named[0].name, named[0].category, el.name].join(" "))
+        || named.length === 0 && options.rebarEvidence.allowUntagged && !impliedSteel(el));
       let cls = constituents.size > 1 ? "unknown" : named.find((l) => l.cls)?.cls;
       if (!cls || cls === "panel") guessed = true;
       if (!cls) {
         // 재료가 없으면 ① 수량표 중량/형상 부피로 본 밀도, ② 부재 이름(예: "System Panel: Glazed") 순으로 추정한다.
         // 재료 없는 강재 보를 콘크리트(2.4t/㎥)로, 유리 패널을 강재(7.85t/㎥)로 세는 것을 막는다.
         cls = (impliedSteel(el) ? "metal" : null) || materialClass(el.name)
-          || (options.verifiedStructuralConcrete && STRUCTURAL.has(el.category) ? "concrete" : "unknown");
+          || (planMember || options.verifiedStructuralConcrete && STRUCTURAL.has(el.category) ? "concrete" : "unknown");
       }
       const knownWeight = Number.isFinite(el.weightTons) && el.weightTons >= 0 ? el.weightTons : undefined;
       const part = push(cls, el.volume, cls === "unknown" ? knownWeight : undefined, {
         layer: named.find(l => l.cls)?.name || el.name || "재료 없음",
         reason: constituents.size > 1 ? "두께·구성비 없는 복합 재료" : undefined,
-        reinforced: cls === "concrete" && (reinforcedName.test(named.map(l => l.name + " " + l.category).join(" ") + " " + (el.name ?? ""))
-          || options.verifiedStructuralConcrete && STRUCTURAL.has(el.category) && !/mortar|screed|cement|모르타르|시멘트/i.test(named.map(l => l.name).join(" "))),
+        reinforced: cls === "concrete" && (planMember || hasRebarDesignation(named.map(l => l.name + " " + l.category).join(" ") + " " + (el.name ?? ""))
+          || options.verifiedStructuralConcrete && STRUCTURAL.has(el.category) && !nonRebarConcrete.test([el.name, ...named.map(l => l.name)].join(" "))),
       });
+      if (planMember && part.reinforced) {
+        part.rebarBasis = "plan-structural-member-estimate";
+        if (!named.length) part.massBasis = "plan-structural-member-estimate";
+      }
       if (options.verifiedStructuralConcrete && STRUCTURAL.has(el.category) && cls === "concrete" && !named.some(l => l.cls)) part.massBasis = "verified-rc-structure-assumption";
       if (knownWeight != null && cls === "unknown") {
         part.massBasis = "ifc-weight";
@@ -145,6 +157,24 @@ export function classify(el, rates, overrides = {}, unknownFrame = "aluminum", o
     parts[0].massBasis = "ifc-weight";
     parts[0].unresolved = false;
     if (parts[0].cls !== "unknown") quantityIssues.length = 0;
+  }
+  // Cable assemblies include insulation, and a pipe mesh may represent its outer cylinder.
+  // Retain the geometry for inspection; only material-specific mass is marketable as copper.
+  for (const part of parts) {
+    if (part.stream !== "copper") continue;
+    const name = [part.layer, el.name, el.ifcType].filter(Boolean).join(" ");
+    const cable = /전선|케이블|cable|insulated wire/i.test(name);
+    const pipe = el.category === "pipe" || /동관|배관|pipe|tub(?:e|ing)/i.test(name);
+    if (cable || (pipe && (parts.length !== 1 || (!el.hasNetVolume && !el.hasNetWeight)))) {
+      part.reason = cable ? "피복·접속부를 제외한 순동 중량 미확인" : "동관 벽체의 순체적·순중량 미확인";
+      part.tons = 0;
+      part.unresolved = true;
+      part.massBasis = "unquantified";
+      quantityIssues.push(`${el.name || part.layer}: ${part.reason}`);
+    } else if (pipe && el.hasNetVolume && !el.hasNetWeight) {
+      part.tons = part.m3 * D.copper;
+      part.massBasis = "net-volume-density";
+    }
   }
   // IfcBuildingElementProxy(기타)는 가구·가전·위생기구·조경수 같은 객체가 대부분이고 형상이 닫힌 솔리드가 아니어서
   // 부피가 터무니없이 나온다 (나무 한 그루가 수백 t). 기본은 집계에서 빼고, 화면에서 성상을 고르면 넣는다.
@@ -173,7 +203,7 @@ export function classify(el, rates, overrides = {}, unknownFrame = "aluminum", o
       parts.length = 0;
       push(over, areaBased ? 0 : el.volume, areaWeight);
       parts[0].massBasis = "manual-material-density-assumption";
-      parts[0].reinforced = over === "concrete" && reinforcedName.test(el.name ?? "");
+      parts[0].reinforced = over === "concrete" && hasRebarDesignation(el.name ?? "");
     }
     guessed = false;
     guessedConcreteTread = false;
@@ -221,7 +251,7 @@ export function classifyElements(elements, rates, overrides = {}, unknownFrame =
       if (part.tons === 0) part.m3 = 0;
       part.unresolved = false;
       part.manualInput = { ...input };
-      part.reinforced = part.cls === "concrete" && (input.reinforced === true || part.reinforced === true);
+      part.reinforced = part.cls === "concrete" && (input.reinforced ?? part.reinforced) === true;
       changed = true;
     }
     if (!changed) continue;
@@ -250,6 +280,7 @@ export function isOpenSteelFrame(classified) {
 // 분류한 부재 목록 → 엔진 물량. 철근은 모델에 없으므로 엔진이 콘크리트 부피에서 추정한다.
 export function quantitiesFromElements(classified, area_m2) {
   const t = Object.fromEntries(STREAMS.map((s) => [s, 0]));
+  let salvageCopperTons = 0, separateCopperTons = 0;
   const areaTypes = { board: "board", tile: "tile", aluminum: "aluminum", pvc: "resin" };
   const finishAreas = {};
   for (const [key, cls] of Object.entries(areaTypes)) {
@@ -262,7 +293,7 @@ export function quantitiesFromElements(classified, area_m2) {
       && el.parts.some((p) => p.cls === cls && p.stream === streamOf(cls)));
     if (matching.length) finishAreas[key] = matching.reduce((sum, el) => sum + el.area, 0);
   }
-  let concrete_m3 = 0, masonry_m3 = 0, rebarConcrete_m3 = 0, unverifiedRebarConcrete_m3 = 0;
+  let concrete_m3 = 0, masonry_m3 = 0, rebarConcrete_m3 = 0, unverifiedRebarConcrete_m3 = 0, planRebarConcrete_m3 = 0;
   const quantityIssues = classified.flatMap(el => el.quantityIssues ?? []);
   const unresolvedParts = classified.flatMap(el => (el.unresolvedParts ?? []).map(part => ({
     expressID: el.expressID, name: el.name, groupKey: groupKey(el), category: el.category,
@@ -271,11 +302,15 @@ export function quantitiesFromElements(classified, area_m2) {
   for (const el of classified) for (const p of el.parts) {
     if (!(p.stream in t)) continue; // 제외한 부재
     t[p.stream] += p.tons;
+    const copper = saleableCopperPart(el, p);
+    if (copper) salvageCopperTons += p.tons;
+    if (copper === "separate") separateCopperTons += p.tons;
     // 실제 압쇄되는 콘크리트·모르타르·조적은 IFC 분류가 proxy/plate/covering이어도 누락하지 않는다.
     if (p.stream === "concrete") {
       concrete_m3 += p.m3;
       if (p.reinforced) rebarConcrete_m3 += p.m3;
-      else if (STRUCTURAL.has(el.category) || el.category === "other") unverifiedRebarConcrete_m3 += p.m3;
+      else if (rebarCandidate(el, p)) unverifiedRebarConcrete_m3 += p.m3;
+      if (p.reinforced && p.rebarBasis === "plan-structural-member-estimate") planRebarConcrete_m3 += p.m3;
     }
     // 조적벽도 압쇄기로 허물므로 장비 시간·구조체 공기에 넣는다 (철근 추정에는 넣지 않는다)
     if (p.stream === "masonry") masonry_m3 += p.m3;
@@ -283,8 +318,8 @@ export function quantitiesFromElements(classified, area_m2) {
   // 모델에 그린 철근(IfcReinforcingBar 등)은 이미 metal에 들어 있다. 엔진은 콘크리트 부피로 추정한 철근량에서 이만큼을 뺀다.
   const rebarModeledTons = classified.filter((el) => el.category === "rebar" && el.stream === "metal").reduce((sum, el) => sum + el.tons, 0);
   if (unverifiedRebarConcrete_m3 > 0) quantityIssues.push(`콘크리트 ${unverifiedRebarConcrete_m3.toFixed(3)}㎥의 철근콘크리트 여부 미확인: 해당 부피에서 철근을 자동 매각하지 않습니다.`);
-  return { area_m2, concrete_m3, masonry_m3, rebarConcrete_m3, unverifiedRebarConcrete_m3, finishAreas,
-    rebarFromConcrete: true, rebarModeledTons, t, basis: "IFC",
+  return { area_m2, concrete_m3, masonry_m3, rebarConcrete_m3, planRebarConcrete_m3, unverifiedRebarConcrete_m3, finishAreas,
+    rebarFromConcrete: true, rebarModeledTons, salvageCopperTons, separateCopperTons, t, basis: "IFC",
     quantityIssues: [...new Set(quantityIssues)], unresolvedParts,
     unresolvedMaterialVolume_m3: unresolvedParts.reduce((sum, part) => sum + part.m3, 0),
     excludedEquipmentCount: classified.filter(el => el.excludedReason).length,
@@ -353,6 +388,18 @@ export function isStructuralSteelPart(el, part) {
   return part.stream === "metal" && (["beam", "column"].includes(el.category) || el.category === "plate" && !el.guessed);
 }
 
+function saleableCopperPart(el, part) {
+  if (part.stream !== "copper" || part.unresolved || !(part.tons > 0)) return null;
+  const measured = part.manualInput?.material === "copper" && part.manualInput?.massKg != null;
+  const layer = part.layer || "", description = [layer, el.name, el.ifcType].filter(Boolean).join(" ");
+  if (!measured && (excludedEquipment(el) || /전선|케이블|cable|insulated wire/i.test(description))) return null;
+  if (!measured && (el.category === "pipe" || /동관|배관|pipe|tub(?:e|ing)/i.test(description)) && !el.hasNetVolume && !el.hasNetWeight) return null;
+  if (!measured && (part.massBasis === "area-factor" || el.guessed || !el.layers.some(l => (materialClass(l.name) || materialClass(l.category)) === "copper"))) return null;
+  const sheet = /동판|구리판|순동판|copper[ -]?(?:sheet|plate)|동박|copper[ -]?foil/i.test(description)
+    || (el.category === "plate" && !/동관|배관|pipe|tub(?:e|ing)/i.test(description));
+  return sheet ? "separate" : "unallocated";
+}
+
 export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified, q = {}, mode = "selective", scenario = null) {
   const sel = mode === "selective";
   const cost = (net) => Math.max(0, -net), gain = (net) => Math.max(0, net);
@@ -399,7 +446,7 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
   const estimated = q.concrete_m3 > 0 ? rebarTons(q, p.rebar_kg_per_m3) : 0;
   const scale = total && estimated > 0 ? total.rebar / estimated : 1, sold = total && total.rebar > 0 ? total.rebarAdded / total.rebar : 1;
   const rebarOf = (el, x) => x.cls === "concrete" && x.stream === "concrete"
-    && (q.rebarConcrete_m3 == null ? STRUCTURAL.has(el.category) : x.reinforced)
+    && (q.rebarConcrete_m3 == null ? STRUCTURAL.has(el.category) : x.reinforced || q.rebarConcreteConfirmed && rebarCandidate(el, x))
     ? Math.min(x.tons, scale * rebarTons({ concrete_m3: x.m3, rebarConcrete_m3: x.m3, rebarKgPerM3: q.rebarKgPerM3 }, p.rebar_kg_per_m3)) : 0;
   const windowPart = (el, part) => q.windowMode && (el.category === "window" || part.windowAssembly);
   const frameRate = (key) => Math.max(0, Math.min(100, q[key + (sel ? "Sel" : "Crush")] ?? 100)) / 100;
@@ -413,6 +460,11 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
     return fee(part.stream);
   };
   const partPrice = (el, part) => {
+    if (part.stream === "copper" && q.fixedComparison) {
+      const source = saleableCopperPart(el, part);
+      const distinctOnly = scenario?.copperSales?.distinctOnly ?? (q.copperPipeSold != null || q.pipeInstalled != null);
+      return source && (!distinctOnly || source === "separate") ? copperRate * p.price_copper : 0;
+    }
     if (windowPart(el, part) && part.stream === "aluminum") return frameRate("al") * (q.alPrice == null ? p.price_aluminum : q.alPrice * 1000);
     if (windowPart(el, part) && part.stream === "resin") return q.pvcPrice == null ? 0 : frameRate("pvc") * gain(q.pvcPrice * 1000);
     return q.steelWork && isStructuralSteelPart(el, part) ? (p.rec_structural_steel ?? p.rec_scrap_sel) * p.price_scrap : price(part.stream);

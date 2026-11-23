@@ -2,7 +2,7 @@
 // 계획서의 구조도면(그리드, 부재 목록, 배치)을 옮긴 JSON만 있으면 Revit 없이 구조체 모델이 만들어진다.
 // 좌표는 mm, y는 도면처럼 아래로 증가. 보·벽은 축에 나란한 선분만 지원한다.
 
-import { materialClass } from "./classify.js?v=field-20261123";
+import { materialClass } from "./classify.js?v=salvage-20261123";
 
 const m = (mm) => mm / 1000;
 // 부재 재료: section.material이 있으면 그 이름(예: "Brick masonry", "Steel SS400"), 없으면 콘크리트

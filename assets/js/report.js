@@ -61,6 +61,7 @@ function rc01(ctx) {
     ["일괄 압쇄", won(s.crush_total_won), true],
     ["전면 분별", won(s.selective_total_won), true],
     ["차액 (분별 − 압쇄)", signedWon(s.delta_won), true],
+    ...(s.salvage_revenue ? [["매각수익 (압쇄 / 분별)", won(s.salvage_revenue.crush.total_won) + " / " + won(s.salvage_revenue.selective.total_won), false]] : []),
     ["포함 비용에서 분별이 낮은 모의시행 비율", `${(Number(s.p_selective_cheaper) * 100).toFixed(1)}%`, false],
     ["비교 결과", recommended(s), false],
   ];

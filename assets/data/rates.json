@@ -2,7 +2,7 @@
   "note": "assumed=true 인 값은 출처가 없는 잠정값이다. 화면과 보고서에 '가정'으로 표시한다.",
   "legacyComparisonScenarios": {
     "note": "기존 결과 재현용 입력 기록이며 기본 공법 차등이나 검증된 확률분포가 아니다. 서로 다른 연구의 회수·수집·재활용 지표를 매각가능 회수율 차이로 해석하지 않는다.",
-    "recoveryRates": {"rec_scrap_crush":0.92,"rec_scrap_sel":0.95,"rec_nonferrous_crush":0.31,"rec_nonferrous_sel":0.95},
+    "recoveryRates": {"rec_scrap_crush":0.92,"rec_scrap_sel":0.95,"rec_nonferrous_crush":0.31,"rec_nonferrous_sel":0.95,"rec_copper_crush":0.3,"rec_copper_sel":0.9},
     "concreteShares": {"same":[0.66,0.26,0.08],"standard":[0.71,0.26,0.03],"good":[0.8,0.18,0.02]}
   },
   "sources": {
@@ -77,7 +77,7 @@
     "office_cable_embedded_crush": {"group": "설비 회수 가정", "label": "매립 전선 회수율 (압쇄)", "value": 0.1, "unit": "비율", "source": "assumed", "assumed": true},
     "office_cable_embedded_selective": {"group": "설비 회수 가정", "label": "매립 전선 회수율 (분별)", "value": 0.8, "unit": "비율", "source": "assumed", "assumed": true},
     "price_pvc_reference": {"group": "매각가", "label": "PVC 창틀 인수 참고가", "value": 230, "unit": "원/kg", "source": "pvc_profile_study", "date": "2023", "ref": "수집·선별업체 매입 0.17달러/kg을 1,357원/달러로 환산. 현장 견적 입력란의 참고값."},
-    "price_copper": {"group": "매각가", "label": "구리 (기존 비교용 상동)", "legacy": true, "value": 16400000, "unit": "원/t", "source": "meeting", "date": "2026-11", "min": 15000000, "max": 17400000},
+    "price_copper": {"group": "매각가", "label": "분리 순구리 (상동 등급 가정)", "value": 16600000, "unit": "원/t", "source": "salvage_market", "date": "2026-09-15", "ref": "올메탈 매입 참고가 상동 16,600원/kg × 1,000. 구리로 확인한 물량에 회수율을 적용하며 등급·수거 조건은 매입처 견적으로 수정. https://allmetal.co.kr/bbs/board.php?bo_table=price&wr_id=159"},
     "price_aluminum": {"group": "매각가", "label": "알루미늄 샤시", "value": 2500000, "unit": "원/t", "source": "meeting", "date": "2026-11", "min": 2000000, "max": 2800000},
     "net_wood": {"group": "매각가", "label": "분리 폐목재 순단가 (+매각 / −처리비)", "value": 1000, "unit": "원/t", "source": "team1118", "date": "2025-11 ~ 2026-02", "ref": "+1,000 김포시 공고 제2025-2813호 최저매각가를 비교값으로 사용. 영천 −80,000은 운반·선별·VAT 포함, 별도 사례.", "assumed": true, "sample": false},
     "net_resin": {"group": "매각가", "label": "분리 폐합성수지 순단가 (+매각 / −처리비)", "value": -230000, "unit": "원/t", "source": "team1118", "date": "2025 ~ 2026-04", "ref": "기본 −230,000 나라장터 R25BK01225044 (운반·VAT 별도). 다른 배출원·원가 범위의 −220,000 및 −379,211은 비교 사례.", "assumed": true, "sample": false},
@@ -90,8 +90,8 @@
     "rec_sel_resin": {"group": "회수율", "label": "분별: 합성수지 분리율", "value": 0.95, "unit": "비율", "source": "assumed", "assumed": true, "min": 0.5, "max": 1, "ref": "팀 비교 가정. 수지 품질·오염·혼합 상태에 영향받음."},
     "rec_sel_glass": {"group": "회수율", "label": "분별: 폐유리 별도 반출 비율", "value": 0, "unit": "비율", "source": "assumed", "assumed": true, "ref": "별도 처리 경로가 확인되면 비율과 처리 견적을 입력."},
     "rec_sel_board": {"group": "회수율", "label": "분별: 폐보드 별도 반출 비율", "value": 0, "unit": "비율", "source": "assumed", "assumed": true, "ref": "별도 처리 경로가 확인되면 비율과 처리 견적을 입력."},
-    "rec_copper_crush": {"group": "회수율", "label": "압쇄: 구리 매각 회수율", "legacy": true, "value": 0.3, "unit": "비율", "source": "assumed", "assumed": true, "ref": "기존 비철 회수율을 구리의 비교 가정으로 사용. 구리 실측 미확인."},
-    "rec_copper_sel": {"group": "회수율", "label": "분별: 구리 매각 회수율", "legacy": true, "value": 0.9, "unit": "비율", "source": "assumed", "assumed": true, "ref": "기존 비철 회수율을 구리의 비교 가정으로 사용. 구리 실측 미확인."},
+    "rec_copper_crush": {"group": "회수율", "label": "압쇄: 분리 순구리 매각 회수율", "value": 0.95, "unit": "비율", "source": "assumed", "assumed": true, "sample": false, "ref": "식별한 순구리 중량에 적용하는 양 공법 공통 비철 회수 가정. 현장 계근자료에 맞춰 변경."},
+    "rec_copper_sel": {"group": "회수율", "label": "분별: 분리 순구리 매각 회수율", "value": 0.95, "unit": "비율", "source": "assumed", "assumed": true, "sample": false, "ref": "식별한 순구리 중량에 적용하는 양 공법 공통 비철 회수 가정. 현장 계근자료에 맞춰 변경."},
     "sched_setup_base": {"group": "공기 규칙", "label": "가설 설치: 기본 일수", "value": 1, "unit": "일", "source": "plans", "date": "2026-11"},
     "sched_setup_per_1000m2": {"group": "공기 규칙", "label": "가설 설치: 연면적 1,000㎡당", "value": 1, "unit": "일", "source": "plans", "date": "2026-11"},
     "sched_interior_per_1000m2": {"group": "공기 규칙", "label": "내부 철거: 연면적 1,000㎡당", "value": 1, "unit": "일", "min": 0.5, "max": 2, "source": "plans", "date": "2026-11"},
