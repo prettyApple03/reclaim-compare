@@ -50,7 +50,9 @@ test("창호는 면적으로 유리와 창틀을 나누고, 재료 없는 벽은
   near(w.parts.find((p) => p.stream === "aluminum").tons, 2.7 * 0.01);
   const g = classify(el("wall", []), rates);
   assert.equal(g.guessed, true);
-  assert.equal(g.stream, "concrete");
+  assert.equal(g.stream, "mixed");
+  assert.equal(g.tons, 0);
+  assert.ok(g.quantityIssues.length > 0);
 });
 
 test("사용자 지정 성상이 우선한다", () => {
@@ -60,7 +62,7 @@ test("사용자 지정 성상이 우선한다", () => {
 
 test("물량 합산, 원단위 보충, 부재별 결과 CSV", () => {
   const list = [
-    classify(el("slab", [{ name: "Concrete", thickness: 0 }], 100), rates),
+    classify(el("slab", [{ name: "Reinforced Concrete", thickness: 0 }], 100), rates),
     classify(el("covering", [{ name: "Plywood", thickness: 0 }], 0.5), rates),
     classify(el("pipe", [{ name: "Copper Pipe", thickness: 0 }], 0.01), rates),
   ];

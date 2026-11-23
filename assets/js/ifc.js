@@ -51,6 +51,9 @@ const CATEGORY = {
   IFCWINDOW: "window", IFCDOOR: "door", IFCCURTAINWALL: "window", IFCCOVERING: "covering", IFCRAILING: "railing",
   IFCPLATE: "plate", IFCMEMBER: "plate", IFCFLOWSEGMENT: "pipe", IFCFLOWFITTING: "pipe", IFCPIPESEGMENT: "pipe",
   IFCPIPEFITTING: "pipe", IFCDUCTSEGMENT: "pipe", IFCDUCTFITTING: "pipe", IFCBUILDINGELEMENTPROXY: "other",
+  // 목록에 남겨 제외 사유와 별도 반출 범위를 보여 준다. 재료명이 있다고 건축재 솔리드 물량으로 넣지 않는다.
+  IFCFURNISHINGELEMENT: "other", IFCFLOWTERMINAL: "other", IFCFURNITURE: "other",
+  IFCSANITARYTERMINAL: "other", IFCUNITARYEQUIPMENT: "other",
   // IFC4·ArchiCAD·Tekla가 쓰는 세부 종류. 빠지면 부재가 경고 없이 물량에서 사라진다.
   IFCWALLELEMENTEDCASE: "wall", IFCSLABSTANDARDCASE: "slab", IFCSLABELEMENTEDCASE: "slab", IFCBEAMSTANDARDCASE: "beam",
   IFCCOLUMNSTANDARDCASE: "column", IFCMEMBERSTANDARDCASE: "plate", IFCPLATESTANDARDCASE: "plate",
@@ -286,7 +289,7 @@ export async function parseIfc(buffer) {
       const category = catOf.get(api.GetLineType(model, mesh.expressID));
       if (!category) continue;
       const a = acc.get(mesh.expressID) || { category, volume: 0, surface: 0 };
-      if (category === "stair" || category === "plate") {
+      {
         a.bounds ??= { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
         for (let i = 0; i < mesh.positions.length; i++) {
           const axis = i % 3;
@@ -329,7 +332,8 @@ export async function parseIfc(buffer) {
       const w = (Number(line.OverallWidth?.value) || 0) * scale, h = (Number(line.OverallHeight?.value) || 0) * scale;
       return {
         expressID: id, globalId: line.GlobalId?.value || "", tag: line.Tag?.value || "", name: line.Name?.value || "",
-        category, bounds: a.bounds, predefined: pre || "",
+        category, ifcType: api.GetNameFromTypeCode(api.GetLineType(model, id)), lengthScale: scale,
+        bounds: a.bounds, predefined: pre || "",
         basement: storeys[(floorOf.get(id) ?? 0) - 1]?.basement ?? false,
         roofLevel: storeys[(floorOf.get(id) ?? 0) - 1]?.roof ?? false,
         floor: category === "footing" ? 0 : floorOf.get(id) || 1,
@@ -343,12 +347,20 @@ export async function parseIfc(buffer) {
     const used = new Set(elements.filter((e) => e.category !== "footing").map((e) => e.floor));
     const floors = used.size || storeys.length || 1;
     const aboveFloors = new Set(elements.filter(e => e.category !== "footing" && !e.basement && !e.roofLevel).map(e => e.floor)).size;
+    const belowFloors = new Set(elements.filter(e => e.category !== "footing" && e.basement).map(e => e.floor)).size;
+    const aboveBounds = elements.filter(e => !e.basement && e.category !== "footing" && e.bounds);
+    const aboveHeight_m = aboveBounds.length ? Math.max(...aboveBounds.map(e => e.bounds.max[1])) - Math.min(...aboveBounds.map(e => e.bounds.min[1])) : 0;
     const aboveArea = grossArea(elements.filter(e => !e.basement && !e.roofLevel && e.category !== "footing"), size, aboveFloors || 1).area;
     const buildings = ids(W.IFCBUILDING).map(id => api.GetLine(model,id));
     const description = buildings.flatMap(b => [b.Name, b.LongName, b.ObjectType, b.Description]).map(v => v?.value || "").join(" ");
     const usage = /아파트|공동주택|apartment/i.test(description) ? "공동주택"
       : /단독주택|single.family/i.test(description) ? "단독주택" : null;
-    return { meshes, elements, size, floors, aboveFloors, aboveArea, usage, lengthScale: scale, gross: grossArea(elements, size, floors),
+    const includedIds = new Set(elements.map(el => el.expressID));
+    const omittedObjects = [...new Set(meshes.map(mesh => mesh.expressID))].filter(id => !includedIds.has(id)).map(id => ({
+      expressID: id, ifcType: api.GetNameFromTypeCode(api.GetLineType(model, id)), name: api.GetLine(model, id).Name?.value || "",
+    }));
+    return { meshes, elements, size, floors, aboveFloors, belowFloors, aboveHeight_m, aboveArea, usage, lengthScale: scale, gross: grossArea(elements, size, floors),
+      grossAreaEstimated: true, areaBasisNote: "슬래브 수평투영 합계 또는 외곽 상자로 추정한 형상면적입니다. 해체 범위·중복·법정 연면적을 확인하세요.", omittedObjects,
       volumeCheck: volumeCheck(elements) };
   } finally {
     api.CloseModel(model);

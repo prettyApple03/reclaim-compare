@@ -1,4 +1,4 @@
-import { equipmentMode, schedule, SITES } from "./scenario.js";
+import { equipmentMode, schedule, SITES } from "./scenario.js?v=field-20261123";
 
 export const VALIDATION_SCHEMA = "reclaim-validation/1";
 export const MIN_CASES = 5;

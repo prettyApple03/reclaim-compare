@@ -14,12 +14,14 @@ const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} ≠ ${
 
 test("유리섬유·광물섬유 단열재는 폐유리(2.5t/㎥)가 아니라 단열재로 분류한다", () => {
   for (const name of ["Glass Wool", "Fiberglass Batt", "그라스울 50K", "유리섬유 보온재", "유리면", "Mineral Wool", "암면"]) {
-    assert.equal(materialClass(name), "insulation", name);
+    assert.equal(materialClass(name), "mineralInsulation", name);
   }
   assert.equal(materialClass("Glass"), "glass");
   assert.equal(materialClass("복층유리"), "glass");
   const wall = classify(el("wall", [{ name: "Concrete", thickness: 0.2 }, { name: "Glass Wool", thickness: 0.1 }], 3), rates);
-  near(wall.parts[1].tons, 1 * rates.density.insulation); // 1㎥ × 0.03, 2.5t 아님
+  near(wall.parts[1].tons, 0); // 광물단열재 밀도 미확인: EPS의 0.03t/㎥를 전용하지 않는다.
+  assert.equal(wall.parts[1].stream, "mixed");
+  assert.equal(wall.parts[1].unresolved, true);
 });
 
 test("재료 없는 커튼월 유리 패널은 이름으로 폐유리, 재료 없는 강재 보는 수량표 중량으로 강재", () => {
@@ -31,8 +33,11 @@ test("재료 없는 커튼월 유리 패널은 이름으로 폐유리, 재료 �
   const beam = classify(el("beam", [], 0.05, 0, { weightTons: 0.3925 }), rates); // 0.3925 / 0.05 = 7.85 t/㎥
   assert.equal(beam.stream, "metal");
   near(beam.tons, 0.3925);
-  // 중량이 콘크리트 밀도면 기존처럼 부재 종류 기본값(콘크리트)
-  assert.equal(classify(el("beam", [], 0.05, 0, { weightTons: 0.12 }), rates).stream, "concrete");
+  // 중량만으로 재료를 확정하지 않는다. 확인된 중량은 성상 미확인으로 유지한다.
+  const unknown = classify(el("beam", [], 0.05, 0, { weightTons: 0.12 }), rates);
+  assert.equal(unknown.stream, "mixed");
+  near(unknown.tons, 0.12);
+  assert.ok(unknown.quantityIssues.length);
 });
 
 test("철근콘크리트 2.4t/㎥ 안의 철근은 폐콘크리트에서 빼고 고철로 센다 (총중량 보존)", () => {
@@ -66,7 +71,7 @@ test("부재별 결과(CSV)의 처리비·수익 합계가 엔진의 철근 분�
 
 test("조적벽 부피도 압쇄 장비 시간·구조체 공기에 들어간다 (철근 추정에는 안 들어간다)", () => {
   const classified = [
-    classify(el("wall", [{ name: "Concrete", thickness: 0 }], 10), rates),
+    classify(el("wall", [{ name: "Reinforced Concrete", thickness: 0 }], 10), rates),
     classify(el("wall", [{ name: "Brick", thickness: 0 }], 4), rates),
   ];
   const q = { ...quantitiesFromElements(classified, 100), floors: 1 };
@@ -125,7 +130,7 @@ test("콘크리트 성상 배분의 기본값은 두 공법 동일: 근거 없�
 });
 
 test("섬유 유리 배팅과 유리·프레임 합성 창호를 별도로 분류한다", () => {
-  assert.equal(materialClass("섬유 유리 배팅"), "insulation");
+  assert.equal(materialClass("섬유 유리 배팅"), "mineralInsulation");
   assert.equal(materialClass("폴리염화비닐, 리지드"), "resin");
   const window = classify(el("plate", [{ name: "창호(알루미늄+유리)", category: "Glazing", thickness: 0 }], 0.8, 9), rates);
   assert.equal(window.guessed, true);
@@ -143,7 +148,8 @@ test("보드·타일 철거 비용만 있고 효과가 0이면 그 금액과 상
   const r = unbenefitedFinishLabor(base, p);
   const without = compare({ ...base, finishAreas: { ...base.finishAreas, board: 0, tile: 0 } }, p);
   near(r.cost, compare(base, p).delta - without.delta, 1e-3);
-  assert.ok(r.cost > 0 && r.sharePoints > 0);
+  assert.ok(r.cost > 0);
+  assert.equal(r.sharePoints, null); // Building waste does not inherit the civil pure-concrete tariff.
   // 효과를 넣으면(콘크리트 배분 선택, 보드 분리+견적) 경고하지 않는다. 논문 방식도 해당 없음.
   assert.equal(unbenefitedFinishLabor({ ...base, concreteCase: "good" }, p), null);
   const boardQuote = { ...p, rec_sel_board: 0.8, fee_board_separate: 50000 };
@@ -210,7 +216,7 @@ test("수동 재료 정정 시 중량과 압쇄 물량이 같은 재료를 사�
   for (const [material, concrete, masonry, mass] of [
     ["masonry", 0, 10, 19],
     ["metal", 0, 0, 78.5],
-    ["mixed", 0, 0, 24],
+    ["mixed", 0, 0, 15],
   ]) {
     const q = quantitiesFromElements([classify(wall, rates, { [key]: material })], 100);
     near(q.concrete_m3, concrete);
@@ -249,14 +255,16 @@ test("공법별 운반 견적은 각 순비용에 한 번만 반영하고 0원�
   const q = { area_m2: 100, t: { concrete: 10 } };
   const base = compare(q, p);
   const quoted = compare({ ...q, transportCrush: 1200000, transportSel: 800000 }, p);
-  near(quoted.crush.total - base.crush.total, 1200000);
-  near(quoted.selective.total - base.selective.total, 800000);
+  near(quoted.crush.total - base.crush.total, 1200000 - base.crush.transport);
+  near(quoted.selective.total - base.selective.total, 800000 - base.selective.transport);
   near(quoted.delta - base.delta, -400000);
   assert.equal(base.crush.transportQuote, undefined);
   const partial = compare({ ...q, transportCrush: 1200000 }, p);
   assert.equal(partial.crush.transportQuote, 1200000);
   assert.equal(partial.partialTransport, true);
-  near(partial.delta, base.delta);
+  near(partial.delta - base.delta, base.crush.transport - 1200000);
+  near(partial.crush.transport, 1200000);
+  near(partial.selective.transport, base.selective.transport);
   const free = compare({ ...q, transportCrush: 0, transportSel: 800000 }, p);
   assert.equal(free.partialTransport, false);
   near(free.delta, base.delta + 800000);
@@ -266,14 +274,14 @@ test("공법별 운반 견적은 각 순비용에 한 번만 반영하고 0원�
 test("미회수 매립 철근만 건설폐재류 처리비에 한 번 반영한다", () => {
   const q = {area_m2: 1000, concrete_m3:1329, rebarKgPerM3:100, rebarFromConcrete:true, t:{concrete:3190}};
   for (const [mode, residue] of [["crush",10.632],["selective",6.645]]) {
-    const r = costScenario(q,p,mode);
+    const r = costScenario(q,{...p,rec_scrap_sel:0.95},mode);
     const row = r.rows.find(x => x.item.includes("동반 반입"));
     near(row.qty,residue);
     near(row.amount,residue*p.fee_concrete);
     near(r.concreteIntake+r.sold.metal,q.t.concrete);
     assert.equal(r.unsoldMetal,0);
     assert.equal(r.unpricedDisposal.length,0);
-    const separate = costScenario({...q, t:{...q.t,metal:50}},p,mode);
+    const separate = costScenario({...q, t:{...q.t,metal:50}},{...p,rec_scrap_sel:0.95},mode);
     near(separate.embeddedRebar,residue);
     assert.ok(separate.unsoldMetal>0);
   }

@@ -61,10 +61,10 @@ function rc01(ctx) {
     ["일괄 압쇄", won(s.crush_total_won), true],
     ["전면 분별", won(s.selective_total_won), true],
     ["차액 (분별 − 압쇄)", signedWon(s.delta_won), true],
-    ["분별이 더 저렴할 확률", `${(Number(s.p_selective_cheaper) * 100).toFixed(1)}%`, false],
+    ["포함 비용에서 분별이 낮은 모의시행 비율", `${(Number(s.p_selective_cheaper) * 100).toFixed(1)}%`, false],
     ["비교 결과", recommended(s), false],
   ];
-  const unpriced = s.unpriced_concrete_cut?.length || Object.values(s.unpriced_disposal ?? {}).some((v) => v?.length);
+  const unpriced = s.comparison_review?.length || s.unpriced_concrete_cut?.length || Object.values(s.unpriced_disposal ?? {}).some((v) => v?.length);
   return `<section class="rp-sheet rp-portrait">
     <div class="rp-frame">
       <div class="rp-body rp-01">
@@ -80,7 +80,7 @@ function rc01(ctx) {
         </div>
         <div class="rp-box rp-figure"><h2>공법별 비용 구성</h2>
           ${ctx.chartPng ? `<img src="data:image/png;base64,${ctx.chartPng}" alt="공법별 비용 구성">` : `<p class="rp-empty">비용 그래프를 만들지 못했습니다.</p>`}
-          ${unpriced ? `<p class="rp-note">일부 항목은 미산정 상태입니다.</p>` : ""}
+          ${unpriced ? `<p class="rp-note">${esc(s.comparison_review?.[0] ?? "일부 견적이 빠져 있습니다.")}</p>` : ""}
         </div>
       </div>
       ${titleBlock({ ...ctx, source: ctx.summary.source, number: "RC-01", heading: "경제성 비교" })}

@@ -339,7 +339,7 @@ test("동관과 피복 전선은 확인된 공통 매각량만 기본 비교에 
 });
 
 test("사무소 설치량에 위치별 회수율을 적용하고 확인된 매각량을 우선한다", () => {
-  const input = { ...q, area_m2: 2400, officeRecovery: true, fixedComparison: true, t: { concrete: 50 } };
+  const input = { ...q, area_m2: 2400, officeRecovery: true, fixedComparison: true, t: { concrete: 50 }, recoveryCostCommon: 0, transportCrush: 0, transportSel: 0 };
   const base = compare({ ...input, officeRecovery: false }, p);
   const assumed = compare(input, p);
   assert.ok(Math.abs(assumed.delta - base.delta + 1874880) < 0.01);
@@ -360,9 +360,9 @@ test("사무소 설치량에 위치별 회수율을 적용하고 확인된 매�
 });
 
 test("현장 설치량은 면적이나 용도 대신 입력값을 쓰고 확인된 매각량을 우선한다", () => {
-  const input = { ...q, area_m2: 16241, fixedComparison: true, t: { concrete: 50, copper: 1 } };
+  const input = { ...q, area_m2: 16241, fixedComparison: true, t: { concrete: 50, copper: 1 }, recoveryCostCommon: 0, transportCrush: 0, transportSel: 0 };
   const base = compare(input, p);
-  assert.equal(base.crush.rows.some(row => row.item.endsWith("추정)")), false);
+  assert.equal(base.crush.rows.some(row => row.group === "매각수익" && row.item.endsWith("추정)")), false);
   const installed = compare({ ...input, pipeInstalled: 1, cableInstalled: 0.2 }, p);
   for (const result of [installed.crush, installed.selective]) {
     assert.ok(Math.abs(result.rows.find(row => row.item === "동관 (현장 설치량 추정)").qty - 695) < 1e-9);
