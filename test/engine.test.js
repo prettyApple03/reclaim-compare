@@ -412,3 +412,57 @@ test("공법별 콘크리트 절단·인양 견적은 해당 구간의 압쇄 �
   assert.equal(full.crush.equipmentCrewDays, 0);
   assert.equal(full.crush.schedule.structure, 3);
 });
+
+test("확정 절단면적과 참고 가동시간은 기본 압쇄 물량·공기·매각량을 바꾸지 않는다", () => {
+  const input = { ...q, equipment: "mounted", concrete_m3: 100, masonry_m3: 25 };
+  const base = compare(input, p);
+  const cut = { area: 5, hours: 14.25, days: 0, cost: 1645185, costBasis: "reference", liftingRequired: true, liftingCost: 400000 };
+  const result = compare({ ...input, concreteCut: { selective: cut } }, p);
+  assert.equal(result.crush.total, base.crush.total);
+  assert.equal(result.selective.excavatorHours, base.selective.excavatorHours);
+  assert.equal(result.selective.days, base.selective.days);
+  assert.equal(result.selective.disposal, base.selective.disposal);
+  assert.equal(result.selective.revenue, base.selective.revenue);
+  assert.ok(Math.abs(result.selective.equipment - base.selective.equipment - 2045185) < 1e-6);
+  assert.deepEqual(result.unpricedCuts, []);
+  assert.deepEqual(result.unscheduledCuts, []);
+  const priced = item => result.selective.rows.find(row => row.item.includes(item)).amount;
+  assert.equal(priced("공개 참고단가"), 1645185);
+  assert.equal(priced("별도 인양비"), 400000);
+});
+
+test("공통 절단일은 양안에 반영하며 직접 입력한 공기와 장비의 이중 계산을 피한다", () => {
+  const input = { ...q, equipment: "large", concrete_m3: 100, masonry_m3: 25 };
+  const base = compare(input, p);
+  const cut = { area: 5, days: 2, cost: 2500000, liftingIncluded: true, liftingCost: 100000, avoidedHours: 4 };
+  const both = compare({ ...input, concreteCut: { crush: cut, selective: cut } }, p);
+  assert.ok(Math.abs(both.deltaDays - base.deltaDays) < 1e-9);
+  assert.ok(Math.abs(both.crush.days - base.crush.days - 2) < 1e-9);
+  assert.equal(both.crush.excavatorHours, base.crush.excavatorHours - 4);
+  assert.equal(both.crush.cut.avoidedHoursApplied, 4);
+  assert.equal(both.crush.cut.daysApplied, 2);
+  assert.equal(both.crush.cut.cost, 2500000);
+  const entered = compare({ ...input, concreteCut: { selective: cut },
+    workSchedule: { selective: { totalDays: 32, structureDays: 16, excavatorHours: 20, equipmentQuote: 800000 } } }, p);
+  assert.equal(entered.selective.days, 32);
+  assert.equal(entered.selective.schedule.structure, 16);
+  assert.equal(entered.selective.excavatorHours, 20);
+  assert.equal(entered.selective.cut.avoidedHoursApplied, 0);
+  assert.equal(entered.selective.cut.daysApplied, 0);
+  assert.equal(entered.selective.rows.find(row => row.item.startsWith("구조체 기본 장비")).amount, 800000);
+});
+
+test("절단 견적이나 공기가 미확인일 때 확인된 비용은 표시하고 비교 상태를 구분한다", () => {
+  const base = compare(q, p);
+  const result = compare({ ...q, concreteCut: { selective: { area: 3, cost: 1000000, quoteIncomplete: true } } }, p);
+  assert.deepEqual(result.unpricedCuts, ["selective"]);
+  assert.deepEqual(result.unscheduledCuts, ["selective"]);
+  assert.equal(result.selective.equipment - base.selective.equipment, 1000000);
+  assert.equal(result.selective.days, base.selective.days);
+  const noCutQuote = compare({ ...q, concreteCut: { selective: { area: 3, liftingCost: 200000 } },
+    workSchedule: { selective: { totalDays: 30 } } }, p);
+  assert.deepEqual(noCutQuote.unpricedCuts, ["selective"]);
+  assert.deepEqual(noCutQuote.unscheduledCuts, []);
+  assert.equal(noCutQuote.selective.days, 30);
+  assert.equal(noCutQuote.selective.rows.find(row => row.item.endsWith("별도 인양비")).amount, 200000);
+});

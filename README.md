@@ -52,6 +52,14 @@ node --test
 
 임의의 IFC에도 `reclaim-plan/1` JSON을 연결할 수 있습니다. `building.demolition_area_m2`에는 해당 범위 면적을, `demolition.scope`에는 `above`, `below`, `full`, `partial` 중 실제 범위를 기록합니다. `demolition.work_schedule`은 `crush`와 `selective` 객체에 `totalDays`, `structureDays`, `setupDays`, `interiorDays`, `finishDays`, `excavatorHours`, `equipmentQuote`, `extraWorksCost`를 담을 수 있습니다. 모델 탭의 ‘공정표 입력값 반영’으로 기입한 항목을 적용합니다.
 
+### 콘크리트 특수절단·인양
+
+모델의 `콘크리트 절단·인양`에서 해체 범위 안의 지상·지하 경계, 외곽, 옥상, 코어 등 검토 후보를 확인합니다. 현장의 존치부, 낙하 통제, 인양 조건에 따라 실제 절단면을 등록합니다. 후보와 IFC 참고 치수는 자동으로 비용에 반영하지 않습니다. 두 공법에서 동일한 절단은 공통으로 등록합니다.
+
+절단량은 새 절단선의 길이와 두께의 곱 또는 절단 단면의 넓이로 산정합니다. 견적은 절단과 인양으로 구분하고, 절단 견적에 인양이 들어 있다면 별도 인양비를 합산하지 않습니다. 와이어쏘의 작업시간 참고값은 [서울시 도시철도 적산](https://news.seoul.go.kr/citybuild/archives/235864?listPage=2)과 [건식 와이어쏘 신기술 품셈](https://www.codil.or.kr/filebank/files/201806/helpdesk/BBS_201806211120111581.pdf?atchFileId=FILE_000000000006598&fileSn=1)의 서로 다른 조건을 사용합니다. [성남시 교량 계약 단가](https://www.seongnam.go.kr/contents/down/public_works/10478_71_2.pdf)는 선택한 경우에만 와이어쏘 절단비의 참고값으로 적용합니다.
+
+기본 공기에는 실제로 늘어나는 작업일을, 기본 굴착기 산정에는 실제로 줄어드는 시간만 반영합니다. 직접 입력한 전체·구조체 공정표와 기본 장비의 현장 시간·견적을 우선합니다. 절단 대상 범위나 일부 견적이 미확정이면 포함 비용을 비교할 수 있고 최종 판단은 보류합니다.
+
 ## 파일
 
 ```
