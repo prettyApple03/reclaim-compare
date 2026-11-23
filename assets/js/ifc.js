@@ -181,6 +181,185 @@ export function volumeUnitM3(unit) {
   return prefix ? PREFIX[prefix] ** 3 : 1;
 }
 
+function areaUnitM2(unit) {
+  if (enumOf(unit?.UnitType) !== "AREAUNIT") return NaN;
+  if (unit.ConversionFactor) {
+    const c = unit.ConversionFactor;
+    return Number(c.ValueComponent?.value ?? c.ValueComponent) * areaUnitM2(c.UnitComponent);
+  }
+  return enumOf(unit.Name) === "SQUARE_METRE" ? (PREFIX[enumOf(unit.Prefix)] ?? 1) ** 2 : NaN;
+}
+
+function massPerLengthUnit(unit) {
+  let mass = 0, length = 0, scale = 1;
+  for (const element of unit?.Elements ?? []) {
+    const exponent = Number(element.Exponent?.value);
+    if (!Number.isInteger(exponent)) return NaN;
+    const unitType = enumOf(element.Unit?.UnitType);
+    if (unitType === "MASSUNIT") {
+      mass += exponent;
+      scale *= massUnitTons(element.Unit) ** exponent;
+    } else if (unitType === "LENGTHUNIT") {
+      length += exponent;
+      scale *= unitFactor(element.Unit) ** exponent;
+    } else return NaN;
+  }
+  return mass === 1 && length === -1 ? scale : NaN;
+}
+
+const positive = value => Number.isFinite(value) && value > 0;
+const nonnegative = value => Number.isFinite(value) && value >= 0;
+const propertyName = property => String(property?.Name?.value ?? "").toLowerCase().replace(/\s/g, "");
+const measuredLengthScale = (unit, projectScale) => unit == null ? projectScale
+  : enumOf(unit.UnitType) === "LENGTHUNIT" ? unitFactor(unit) : NaN;
+const pureCopper = value => /\bcopper\b|\bcu\b|순동|구리|동관|동선/i.test(value)
+  && !/brass|bronze|alloy|tinned|plated|clad|황동|청동|합금|도금|복합|알루미늄|alumin/i.test(value);
+const insulated = /insulat|sheath|피복|절연|외피|\bpvc\b|\bxlpe\b/i;
+const otherCable = /optical|fiber|fibre|bare|busbar|광케이블|광섬유|나선|무피복|\bcca\b|clad|구리피복\s*알루미늄/i;
+const excludedCableTypes = new Set(["BUSBARSEGMENT", "CONDUCTORSEGMENT", "CORESEGMENT", "FIBERSEGMENT", "FIBERTUBE", "OPTICALCABLESEGMENT"]);
+
+// 현장 회수량 산정에 쓸 수 있는, 실제 모델 속성에 근거한 설치 중량만 계산한다.
+export function ifcServiceMass(kind, measures) {
+  const { weight, length, massPerLength, wallVolume, netSectionArea, outerDiameter, innerDiameter, wallThickness } = measures;
+  if (nonnegative(weight)) return { tons: weight, basis: "ifc-weight" };
+  if (kind === "cable") {
+    const tons = length * massPerLength;
+    return positive(length) && nonnegative(massPerLength) && Number.isFinite(tons)
+      ? { tons, basis: "ifc-mass-per-length" } : { tons: null, basis: null };
+  }
+  const density = 8.96; // 동관 동재량 t/㎥
+  if (positive(wallVolume) && Number.isFinite(wallVolume * density)) return { tons: wallVolume * density, basis: "ifc-net-volume" };
+  if (positive(length) && positive(netSectionArea) && Number.isFinite(netSectionArea * length * density)) {
+    return { tons: netSectionArea * length * density, basis: "ifc-net-section" };
+  }
+  const inner = innerDiameter ?? (positive(wallThickness) ? outerDiameter - 2 * wallThickness : null);
+  if (positive(length) && positive(outerDiameter) && positive(inner) && inner < outerDiameter) {
+    const tons = Math.PI / 4 * (outerDiameter - inner) * (outerDiameter + inner) * length * density;
+    if (positive(tons)) return { tons, basis: "ifc-tube-dimensions" };
+  }
+  return { tons: null, basis: null };
+}
+
+export function ifcServiceKind(type, predefined, layers, productName) {
+  const materials = layers.map(layer => [layer.name, layer.category].filter(Boolean).join(" ")).filter(Boolean);
+  if (type === "pipe") return materials.length > 0 && materials.every(pureCopper) ? "copperPipe" : null;
+  if (type !== "cable" || excludedCableTypes.has(predefined) || otherCable.test(productName)) return null;
+  const details = [productName, ...materials];
+  if (!details.some(pureCopper) || materials.some(material => /\bcca\b|clad/i.test(material)
+    || (/alumini?um|알루미늄/i.test(material) && !/shield|screen|차폐|실드/i.test(material)))) return null;
+  return predefined === "CABLESEGMENT" || details.some(detail => insulated.test(detail)) ? "cable" : null;
+}
+
+function readServiceQuantity(quantity, types, units) {
+  const name = propertyName(quantity);
+  if (quantity.type === types.IFCQUANTITYWEIGHT && ["grossweight", "총중량"].includes(name)) {
+    // 표준 배관 NetWeight에는 관 속 유체가 포함된다.
+    return ["weight", Number(quantity.WeightValue?.value) * massUnitTons(quantity.Unit ?? units.mass)];
+  }
+  if (quantity.type === types.IFCQUANTITYLENGTH && name === "length") {
+    return ["length", Number(quantity.LengthValue?.value) * measuredLengthScale(quantity.Unit, units.length)];
+  }
+  if (quantity.type === types.IFCQUANTITYAREA && name === "netcrosssectionarea") {
+    return ["netSectionArea", Number(quantity.AreaValue?.value) * areaUnitM2(quantity.Unit ?? units.area)];
+  }
+  if (quantity.type === types.IFCQUANTITYVOLUME && ["pipewallvolume", "coppervolume"].includes(name)) {
+    const unit = quantity.Unit ?? units.volume;
+    return ["wallVolume", unit ? Number(quantity.VolumeValue?.value) * volumeUnitM3(unit) : NaN];
+  }
+  return [];
+}
+
+function serviceProperties(kind, propertyIds, read, types, units) {
+  const measures = {};
+  const expected = kind === "cable" ? "pset_cablesegmenttypecablesegment" : "pset_pipesegmenttypecommon";
+  const lengthFields = { length: "length", outerdiameter: "outerDiameter", innerdiameter: "innerDiameter", wallthickness: "wallThickness" };
+  for (const propertyId of propertyIds) {
+    const set = read(propertyId);
+    if (propertyName(set) !== expected) continue;
+    for (const { value: id } of set.HasProperties ?? []) {
+      const property = read(id, true);
+      if (property.type !== types.IFCPROPERTYSINGLEVALUE) continue;
+      const name = propertyName(property);
+      const value = Number(property.NominalValue?.value);
+      if (name === "massperlength" && kind === "cable" && property.NominalValue?.name === "IFCMASSPERLENGTHMEASURE") {
+        const perMetre = value * massPerLengthUnit(property.Unit ?? units.massPerLength);
+        if (nonnegative(perMetre)) measures.massPerLength = perMetre;
+      } else if (Object.hasOwn(lengthFields, name)) {
+        const metres = value * measuredLengthScale(property.Unit, units.length);
+        if (positive(metres)) measures[lengthFields[name]] = metres;
+      }
+    }
+  }
+  return measures;
+}
+
+function ancestorIds(id, parentOf) {
+  const parents = [], seen = new Set([id]);
+  for (let parent = parentOf.get(id); parent != null && !seen.has(parent); parent = parentOf.get(parent)) {
+    parents.push(parent);
+    seen.add(parent);
+  }
+  return parents;
+}
+
+function ifcServices({ types, read, ids, typeOf, serviceTypes, serviceData, unitDefaults, parentOf, matOf, floorOf, storeys }) {
+  if (!serviceTypes.size) return [];
+  const serviceParents = new Map(parentOf);
+  for (const id of ids(types.IFCRELNESTS)) {
+    const nested = read(id);
+    const parent = nested.RelatingObject?.value;
+    if (parent != null) for (const child of nested.RelatedObjects ?? []) {
+      if (!serviceParents.has(child.value)) serviceParents.set(child.value, parent);
+    }
+  }
+  const distribution = new Set(ids(types.IFCDISTRIBUTIONFLOWELEMENT, true));
+  const records = new Map();
+  for (const [expressID, type] of serviceTypes) {
+    const line = read(expressID);
+    const typeId = typeOf.get(expressID);
+    const definition = typeId != null ? read(typeId) : null;
+    const occurrenceType = enumOf(line.PredefinedType);
+    const predefined = occurrenceType && occurrenceType !== "NOTDEFINED" ? occurrenceType : enumOf(definition?.PredefinedType);
+    const name = line.Name?.value || "";
+    const product = [name, line.ObjectType?.value, definition?.Name?.value, definition?.ElementType?.value].filter(Boolean).join(" ");
+    const ownLayers = matOf.get(expressID);
+    const kind = ifcServiceKind(type, predefined, ownLayers?.length ? ownLayers : matOf.get(typeId) ?? [], product);
+    if (!kind) continue;
+    const parents = ancestorIds(expressID, serviceParents);
+    const floor = [expressID, ...parents].map(id => floorOf.get(id)).find(value => value != null) ?? null;
+    const { properties, quantities } = serviceData.get(expressID);
+    const propertyIds = [...(definition?.HasPropertySets ?? []).map(ref => ref.value), ...properties];
+    const measures = { ...serviceProperties(kind, propertyIds, read, types, unitDefaults), ...quantities };
+    records.set(expressID, {
+      record: {
+        kind, expressID, globalId: line.GlobalId?.value || "", tag: line.Tag?.value || "", name, floor,
+        category: "pipe", basement: storeys[(floor ?? 0) - 1]?.basement ?? false, basementCap: false,
+        ...ifcServiceMass(kind, measures),
+      },
+      parents,
+    });
+  }
+  for (const [id, { record, parents }] of records) {
+    // 기기 또는 다른 종류의 설비에 들어있는 관과 전선은 별도 물량으로 더하지 않는다.
+    if (parents.some(parent => distribution.has(parent) && records.get(parent)?.record.kind !== record.kind)) records.delete(id);
+  }
+  // 이미 수량이 있는 모델의 전체 구간과 해당 하위 구간이 같이 있으면 전체를 한 번만 센다.
+  const selected = [...records.values()].filter(({ record, parents }) =>
+    !parents.some(id => records.get(id)?.record.kind === record.kind && records.get(id).record.tons != null));
+  const representedParents = new Set(selected.flatMap(({ record, parents }) => parents.filter(id => records.get(id)?.record.kind === record.kind)));
+  const replaces = new Map();
+  for (const [expressID, type] of serviceTypes) {
+    const root = ancestorIds(expressID, serviceParents).findLast(id => serviceTypes.get(id) === type && records.get(id)?.record.tons != null);
+    if (root == null) continue;
+    const duplicates = replaces.get(root) ?? [];
+    duplicates.push(expressID);
+    replaces.set(root, duplicates);
+  }
+  return selected.map(({ record }) => record)
+    .filter(record => record.tons != null || !representedParents.has(record.expressID))
+    .map(record => ({ ...record, replaces: [record.expressID, ...(replaces.get(record.expressID) ?? [])] }));
+}
+
 // 부재 부피: IFC 수량표(Qto) 부피가 있으면 그것을, 없으면 형상 부피를 쓴다.
 // Revit 등이 계산한 NetVolume이 web-ifc 형상(열린 메시·불리언 실패)보다 믿을 만하다.
 export function pickVolume(meshVolume, qtoVolume) {
@@ -221,18 +400,56 @@ export async function parseIfc(buffer) {
   const model = api.OpenModel(normalizeHollowProfilePositions(new Uint8Array(buffer)));
   try {
     const catOf = new Map(Object.entries(CATEGORY).filter(([k]) => W[k] != null).map(([k, c]) => [W[k], c]));
-    const ids = (t) => { const v = api.GetLineIDsWithType(model, t); return Array.from({ length: v.size() }, (_, i) => v.get(i)); };
+    const ids = (t, inherit = false) => {
+      if (t == null) return [];
+      const v = api.GetLineIDsWithType(model, t, inherit);
+      return Array.from({ length: v.size() }, (_, i) => v.get(i));
+    };
+    const read = (id, deep = false) => api.GetLine(model, id, deep);
     const [ua] = ids(W.IFCUNITASSIGNMENT);
     const units = ua ? api.GetLine(model, ua, true).Units || [] : [];
     const scale = lengthScale(units);
     const projectMass = units.find(u => enumOf(u.UnitType) === "MASSUNIT");
-    const projectVolume = volumeUnitM3(units.find(u => enumOf(u.UnitType) === "VOLUMEUNIT"));
+    const volumeUnit = units.find(u => enumOf(u.UnitType) === "VOLUMEUNIT");
+    const projectVolume = volumeUnitM3(volumeUnit);
+    const unitDefaults = {
+      mass: projectMass, length: units.some(unit => enumOf(unit.UnitType) === "LENGTHUNIT") ? scale : NaN, volume: volumeUnit,
+      area: units.find(u => enumOf(u.UnitType) === "AREAUNIT"),
+      massPerLength: units.find(u => enumOf(u.UnitType) === "MASSPERLENGTHUNIT"),
+    };
+    const typeOf = new Map();
+    const serviceTypes = new Map([
+      ...ids(W.IFCCABLESEGMENT).map(id => [id, "cable"]),
+      ...ids(W.IFCPIPESEGMENT).map(id => [id, "pipe"]),
+    ]);
+    for (const rid of ids(W.IFCRELDEFINESBYTYPE)) {
+      const relation = read(rid);
+      const typeId = relation.RelatingType?.value;
+      if (typeId == null) continue;
+      const type = api.GetLineType(model, typeId);
+      const service = type === W.IFCCABLESEGMENTTYPE ? "cable" : type === W.IFCPIPESEGMENTTYPE ? "pipe" : null;
+      for (const object of relation.RelatedObjects || []) {
+        typeOf.set(object.value, typeId);
+        if (service && api.GetLineType(model, object.value) === W.IFCFLOWSEGMENT) serviceTypes.set(object.value, service);
+      }
+    }
+    const serviceData = new Map([...serviceTypes.keys()].map(id => [id, { quantities: {}, properties: [] }]));
     const weights = new Map(), volumes = new Map();
     for (const rid of ids(W.IFCRELDEFINESBYPROPERTIES)) {
       const relation = api.GetLine(model, rid);
       const id = relation.RelatingPropertyDefinition?.value;
-      if (!id || api.GetLineType(model, id) !== W.IFCELEMENTQUANTITY) continue;
-      for (const ref of api.GetLine(model, id).Quantities || []) {
+      if (!id) continue;
+      const definitionType = api.GetLineType(model, id);
+      const serviceObjects = (relation.RelatedObjects || []).map(object => serviceData.get(object.value)).filter(Boolean);
+      if (definitionType === W.IFCPROPERTYSET) for (const service of serviceObjects) service.properties.push(id);
+      if (definitionType !== W.IFCELEMENTQUANTITY) continue;
+      for (const ref of read(id).Quantities || []) {
+        if (serviceObjects.length > 0) {
+          const [key, value] = readServiceQuantity(read(ref.value, true), W, unitDefaults);
+          if (key && (key === "weight" ? nonnegative(value) : positive(value))) {
+            for (const service of serviceObjects) service.quantities[key] ??= value;
+          }
+        }
         if (api.GetLineType(model, ref.value) === W.IFCQUANTITYVOLUME) {
           const quantity = api.GetLine(model, ref.value, true);
           // NetVolume(개구부 제외)을 GrossVolume보다 우선한다
@@ -281,12 +498,6 @@ export async function parseIfc(buffer) {
       const layers = materialLayers(api.GetLine(model, r.RelatingMaterial.value, true), W).filter((l) => l.name || l.category);
       for (const o of r.RelatedObjects || []) matOf.set(o.value, layers);
     }
-    const typeOf = new Map();
-    for (const rid of ids(W.IFCRELDEFINESBYTYPE)) {
-      const r = api.GetLine(model, rid);
-      for (const o of r.RelatedObjects || []) typeOf.set(o.value, r.RelatingType?.value);
-    }
-
     // 형상: 배치 행렬을 적용한 월드 좌표 (web-ifc 출력은 Y-up, m 단위)
     const meshes = [];
     api.StreamAllMeshes(model, (flat) => {
@@ -390,7 +601,8 @@ export async function parseIfc(buffer) {
     const description = buildings.flatMap(b => [b.Name, b.LongName, b.ObjectType, b.Description]).map(v => v?.value || "").join(" ");
     const usage = /아파트|공동주택|apartment/i.test(description) ? "공동주택"
       : /단독주택|single.family/i.test(description) ? "단독주택" : null;
-    return { meshes, elements, size, floors, ...scopeGeometry(elements, size, storeys), usage, lengthScale: scale, gross: grossArea(elements, size, floors),
+    const services = ifcServices({ types: W, read, ids, typeOf, serviceTypes, serviceData, unitDefaults, parentOf, matOf, floorOf, storeys });
+    return { meshes, elements, services, size, floors, ...scopeGeometry(elements, size, storeys), usage, lengthScale: scale, gross: grossArea(elements, size, floors),
       volumeCheck: volumeCheck(elements) };
   } finally {
     api.CloseModel(model);

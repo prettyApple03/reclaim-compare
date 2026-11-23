@@ -62,6 +62,14 @@ node --test
 
 분별 선철거·선별에 추가로 쓰는 소형 장비는 추가 작업일당 1.2시간을 잠정 적용합니다. [거제 공동주택 시험시공](https://kscejournal.or.kr/jksce/XmlViewer/f406455)의 장비 운용 사례를 참고한 비교 가정입니다. 모델에서 해당 현장의 추가 가동시간이나 견적을 입력하면 추정을 대체합니다. 추정과 무상·미사용을 구분하려면 추가 투입이 없을 때 0을 입력합니다.
 
+### 동관·폐전선 매각
+
+설치량은 현장 입력, IFC의 확인 가능한 설비 수량, 해체 대상 연면적의 순으로 적용합니다. 해체 면적의 비교 원단위는 피복 포함 전선이 주택 0.35·일반 비주거 0.60kg/㎡, 동관이 주택 0.10·일반 비주거 0.25kg/㎡입니다. 부분해체·지하부·개방형 골조와 공장 등 특수 용도는 IFC 수량이나 입력값을 사용합니다. 품목의 설치가 없으면 설치 중량에 0을 입력합니다. 계근 매각량 입력은 회수 추정보다 우선합니다.
+
+접근 가능한 설비는 양 공법에서 85%, 접근이 어려운 설비는 압쇄 15%·분별 65%를 비교 가정으로 적용합니다. 노출 비중은 폐전선 50%, 동관 70%입니다. 따라서 전체 가정 회수율은 폐전선 50%·75%, 동관 64%·79%입니다. [Yale 구리 회수 연구](https://elischolar.library.yale.edu/fes-pubs/12/)의 노출 구리 회수 사례와 [Curtis Plaza 분별 철거](https://en.echo.com.pl/preview%2C2060%2Cecho-investment-capital-group-sustainability-report-for-2025.pdf)의 전선 회수 사례를 참고했습니다. 국내 공법별 계근 자료가 확보되면 단가 탭의 원단위와 회수 가정을 교체할 수 있습니다.
+
+면적 원단위는 해외의 [주택·업무시설 전선 설치 자료](https://www.dflca.ch/inventories/Baumaterial/BfU_2011-GraueEnergie_Sanitaer_Elektro.pdf), [사무소 동관 설치 자료](https://www.pankowfoundation.org/site/assets/files/2034/4lcaofmechanicalelectricalandplumbinginofficebuildingsfinalreport.pdf#page=28), [상업시설 부분해체 계근](https://www.scielo.br/j/esa/a/NzFzz4DRN3p4K6FfXqSYfGv/?format=html&lang=en), [주택 동관 시스템 모델](https://help.oneclicklca.com/en/articles/275986-one-click-lca-generic-data-updates-2025)을 낮춰 적용한 잠정 추정입니다. 설비 설치량과 인수가는 비교 화면에 근거와 함께 표시합니다.
+
 ## 파일
 
 ```

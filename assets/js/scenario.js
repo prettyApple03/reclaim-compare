@@ -2,6 +2,7 @@
 // 물량 q = { area_m2, floors(지상 층수), concrete_m3, rebarFromConcrete, t: { concrete, metal, wood, resin, glass, board, mixed, copper, aluminum },
 //          site(대지 조건: SITES의 키), labor(분별 추가 품 계산: "paper" | "quantity") }
 // 단가 p = { 키: 숫자 } (rates.json의 params에서 value만 뽑은 것)
+import { serviceItems, serviceSalvage } from "./service-salvage.js?v=service-recovery-20261123";
 
 export const STREAMS = ["concrete", "masonry", "metal", "wood", "resin", "glass", "tile", "board", "panel", "mixed", "copper", "aluminum"];
 export const STREAM_LABEL = {
@@ -339,14 +340,20 @@ export function costScenario(q, p, mode) {
 
   const nf = sel ? p.rec_nonferrous_sel : p.rec_nonferrous_crush;
   const copperRate = (sel ? p.rec_copper_sel : p.rec_copper_crush) ?? nf;
-  const copperSold = q.fixedComparison ? q.copperPipeSold ?? 0 : t.copper * copperRate;
+  const services = serviceSalvage(q, p);
+  const pipe = services?.copperPipe;
+  const cable = services?.cable;
+  const soldPipe = pipe?.methods[mode];
+  const soldCable = cable?.methods[mode];
+  const copperSold = q.fixedComparison ? services ? (soldPipe.soldKg ?? 0) / 1000 : q.copperPipeSold ?? 0 : t.copper * copperRate;
+  const quantityBasis = { ifc: "IFC 설치량·회수율 적용", input: "현장 설치량·회수율 적용", area: "연면적 추정" };
   const scrapRecovery = sel ? p.rec_scrap_sel : p.rec_scrap_crush;
   const structuralSteel = Math.min(Math.max(0, metal - rebar), q.structuralSteelTons ?? 0);
   const commonRecovery = p.rec_structural_steel ?? p.rec_scrap_sel;
   const sold = { metal: (metal - structuralSteel) * scrapRecovery + structuralSteel * commonRecovery, copper: copperSold, aluminum: Math.max(0, t.aluminum - alFrame) * nf + alRecovered };
   let revenue = -add("매각수익", "고철", sold.metal, "t", p.price_scrap, -1)
     - (q.fixedComparison
-      ? add("매각수익", "확인된 동관", sold.copper * 1000, "kg", p.price_copper_pipe, -1)
+      ? add("매각수익", soldPipe && !soldPipe.confirmed ? `동관 (${quantityBasis[pipe.source]})` : "확인된 동관", sold.copper * 1000, "kg", p.price_copper_pipe, -1)
       : add("매각수익", "구리", sold.copper, "t", p.price_copper, -1))
     - add("매각수익", "알루미늄", sold.aluminum - alRecovered, "t", p.price_aluminum, -1);
   if (alRecovered) revenue -= add("매각수익", "알루미늄 창틀", alRecovered * 1000, "kg", q.alPrice ?? p.price_aluminum / 1000, -1);
@@ -354,21 +361,34 @@ export function costScenario(q, p, mode) {
     if (q.pvcPrice > 0) revenue -= add("매각수익", "PVC 창틀", pvcRecovered * 1000, "kg", q.pvcPrice, -1);
     else disposal += add("처리비", q.pvcPrice === 0 ? "PVC 창틀 무상 인수" : "PVC 창틀 처리", pvcRecovered * 1000, "kg", -q.pvcPrice);
   }
-  const cableSold = q[sel ? "cableSel" : "cableCrush"] ?? q.cableCommon ?? 0;
-  const office = officeSalvage(q, p);
-  const cablePrice = q.cablePrice ?? (q.fixedComparison || office ? p.price_waste_cable * 1000 : undefined);
-  const estimatedPipeSold = office?.estimatePipe ? office.pipeKg * office.pipeRate : 0;
-  const estimateCable = sel ? office?.estimateCableSelective : office?.estimateCableCrush;
-  const estimatedCableSold = estimateCable ? office.cableKg * (sel ? office.cableSelectiveRate : office.cableCrushRate) : 0;
-  revenue -= add("매각수익", office?.pipeInstalled ? "동관 (현장 설치량 추정)" : "동관 (사무소 추정)", estimatedPipeSold, "kg", p.price_copper_pipe, -1);
-  if (estimateCable) revenue -= add("매각수익", office.cableInstalled ? "피복 전선 (현장 설치량 추정)" : "피복 전선 (사무소 추정)", estimatedCableSold, "kg", cablePrice / 1000, -1);
-  if (cableSold && cablePrice == null) issues.push("별도 계근 폐전선 인수 견적이 없어 수익에서 제외했습니다.");
-  if (cablePrice != null) revenue -= add("매각수익", "별도 계근 폐전선", cableSold, "t", cablePrice, -1);
+  let estimatedPipeSold = 0;
+  const cableResidue = (soldCable?.residueKg ?? 0) / 1000;
+  if (services) {
+    for (const [kind, label] of serviceItems) {
+      if (services[kind].methods[mode].overInstalled) issues.push(`${label} 계근 매각량이 입력한 설치량을 초과합니다. 두 값의 범위를 확인하세요.`);
+    }
+    revenue -= add("매각수익", soldCable.confirmed ? "별도 계근 폐전선" : `피복 폐전선 (${quantityBasis[cable.source]})`,
+      soldCable.soldKg ?? 0, "kg", cable.price, -1);
+    disposal += add("처리비", "혼합 반출 · 미회수 피복 폐전선", cableResidue, "t", p.fee_mixed_unverified);
+  } else {
+    const cableSold = q[sel ? "cableSel" : "cableCrush"] ?? q.cableCommon ?? 0;
+    const office = officeSalvage(q, p);
+    const cablePrice = q.cablePrice ?? (q.fixedComparison || office ? p.price_waste_cable * 1000 : undefined);
+    estimatedPipeSold = office?.estimatePipe ? office.pipeKg * office.pipeRate : 0;
+    const estimateCable = sel ? office?.estimateCableSelective : office?.estimateCableCrush;
+    const estimatedCableSold = estimateCable ? office.cableKg * (sel ? office.cableSelectiveRate : office.cableCrushRate) : 0;
+    revenue -= add("매각수익", office?.pipeInstalled ? "동관 (현장 설치량 추정)" : "동관 (사무소 추정)", estimatedPipeSold, "kg", p.price_copper_pipe, -1);
+    if (estimateCable) revenue -= add("매각수익", office.cableInstalled ? "피복 전선 (현장 설치량 추정)" : "피복 전선 (사무소 추정)", estimatedCableSold, "kg", cablePrice / 1000, -1);
+    if (cableSold && cablePrice == null) issues.push("별도 계근 폐전선 인수 견적이 없어 수익에서 제외했습니다.");
+    if (cablePrice != null) revenue -= add("매각수익", "별도 계근 폐전선", cableSold, "t", cablePrice, -1);
+  }
   const embeddedRebar = rebar * (1 - scrapRecovery);
   if (embeddedRebar > 0) disposal += add("처리비", "폐콘크리트 동반 반입 · 미회수 철근", embeddedRebar, "t", p.fee_concrete);
   const unsoldSteel = Math.max(0, metal - rebar - structuralSteel) * (1 - scrapRecovery) + structuralSteel * (1 - commonRecovery);
   const unsoldAl = Math.max(0, t.aluminum - sold.aluminum);
-  const unsoldCopper = Math.max(0, t.copper - sold.copper - estimatedPipeSold / 1000);
+  const unsoldCopper = q.fixedComparison && pipe?.treatmentKg != null
+    ? Math.max(0, t.copper - pipe.model.kg / 1000) + soldPipe.residueKg / 1000
+    : Math.max(0, t.copper - sold.copper - estimatedPipeSold / 1000);
   const unsoldMetal = unsoldSteel + unsoldCopper + unsoldAl;
   if (unsoldMetal > 0) {
     const metalFee = q.fixedComparison ? p.fee_mixed_unverified : q.metalFee ?? p.fee_unsold_metal;
@@ -402,7 +422,7 @@ export function costScenario(q, p, mode) {
   const indirect = add("간접비", "현장 간접비", days, "일", p.indirect_per_day);
 
   const daysApplied = workInput.structureDays == null && workInput.totalDays == null ? sched.cutting : 0;
-  return { mode, labor, equipment, disposal, transport, transportQuote, revenue, indirect, days, unpricedDisposal, equipmentCrewDays, excavatorHours, schedule: sched, cut: { ...cut, avoidedHoursApplied, daysApplied }, crews: crew, mixed: mix, finishRoutes, split, sold, embeddedRebar, concreteIntake: t.concrete + embeddedRebar + finishCarryover, unsoldMetal, issues, total: labor + equipment + disposal + transport + indirect - revenue, rows: rows.filter((r) => r.qty > 0) };
+  return { mode, labor, equipment, disposal, transport, transportQuote, revenue, indirect, days, unpricedDisposal, equipmentCrewDays, excavatorHours, schedule: sched, cut: { ...cut, avoidedHoursApplied, daysApplied }, crews: crew, mixed: mix, finishRoutes, split, sold, embeddedRebar, concreteIntake: t.concrete + embeddedRebar + finishCarryover, unsoldMetal, services, cableResidue, issues, total: labor + equipment + disposal + transport + indirect - revenue, rows: rows.filter((r) => r.qty > 0) };
 }
 
 function finishSeparations(q, t, p, selective) {

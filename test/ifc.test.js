@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { lengthScale, openingArea } from "../assets/js/ifc.js";
+import { ifcServiceKind, ifcServiceMass, lengthScale, openingArea } from "../assets/js/ifc.js";
 
 // web-ifc가 GetLine(..., true)로 펼친 IfcUnitAssignment.Units와 같은 모양
 const si = (prefix) => ({ UnitType: { value: "LENGTHUNIT" }, Prefix: prefix ? { value: prefix } : null, Name: { value: "METRE" } });
@@ -16,6 +16,33 @@ test("IFC 길이 단위: m는 1, mm는 0.001, 인치·피트는 환산 배율", 
   const inchInMm = { UnitType: { value: "LENGTHUNIT" }, ConversionFactor: { ValueComponent: { value: 25.4 }, UnitComponent: si("MILLI") } };
   assert.ok(Math.abs(lengthScale([inchInMm]) - 0.0254) < 1e-12);
   assert.equal(lengthScale([]), 1); // 단위 정보가 없으면 m로 본다
+});
+
+test("동관과 피복전선은 설비 종류와 재료 근거가 맞을 때 구분한다", () => {
+  const copper = { name: "Copper", category: "Metal" };
+  assert.equal(ifcServiceKind("pipe", "RIGIDSEGMENT", [copper], "Hot water pipe"), "copperPipe");
+  assert.equal(ifcServiceKind("pipe", "RIGIDSEGMENT", [{ name: "Copper Alloy (Brass)" }], "Copper pipe"), null);
+  assert.equal(ifcServiceKind("pipe", "RIGIDSEGMENT", [], "Copper pipe"), null);
+  assert.equal(ifcServiceKind("cable", "CABLESEGMENT", [copper, { name: "PVC Sheath" }], ""), "cable");
+  assert.equal(ifcServiceKind("cable", "CORESEGMENT", [copper, { name: "PVC Sheath" }], ""), null);
+  assert.equal(ifcServiceKind("cable", "CABLESEGMENT", [{ name: "Aluminum" }], "Insulated copper cable"), null);
+  assert.equal(ifcServiceKind("other", "", [copper, { name: "PVC Sheath" }], ""), null);
+});
+
+test("전선은 피복 포함 중량 또는 선언 선중량만 쓰고 0을 보존한다", () => {
+  assert.deepEqual(ifcServiceMass("cable", { weight: 0, length: 100, massPerLength: 0.0005 }), { tons: 0, basis: "ifc-weight" });
+  assert.deepEqual(ifcServiceMass("cable", { length: 20, massPerLength: 0.0005 }), { tons: 0.01, basis: "ifc-mass-per-length" });
+  assert.deepEqual(ifcServiceMass("cable", { length: 100, outerDiameter: 0.01 }), { tons: null, basis: null });
+});
+
+test("동관은 외경 전체나 유체를 동재 중량으로 계산하지 않는다", () => {
+  assert.deepEqual(ifcServiceMass("copperPipe", { length: 20, outerDiameter: 0.02, fluidWeight: 0.08 }), { tons: null, basis: null });
+  const fromSection = ifcServiceMass("copperPipe", { length: 20, netSectionArea: 0.00006 });
+  assert.equal(fromSection.basis, "ifc-net-section");
+  assert.ok(Math.abs(fromSection.tons - 0.010752) < 1e-10);
+  const fromThickness = ifcServiceMass("copperPipe", { length: 20, outerDiameter: 0.02, wallThickness: 0.001 });
+  assert.equal(fromThickness.basis, "ifc-tube-dimensions");
+  assert.ok(Math.abs(fromThickness.tons - Math.PI * 0.019 * 0.001 * 20 * 8.96) < 1e-10);
 });
 
 test("창·문 면적: mm 속성을 m로 바꾸면 그대로 쓰고, 단위가 어긋나 터무니없으면 형상 값을 쓴다", () => {

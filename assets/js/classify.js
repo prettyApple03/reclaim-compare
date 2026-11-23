@@ -1,5 +1,5 @@
 // IFC 부재(종류·재료 층·부피·면적) → 폐기물 성상별 톤수. DOM·web-ifc를 쓰지 않는다.
-import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, pvcFrameRecovery, rebarTons, streamTons } from "./scenario.js?v=scope-report-20261123";
+import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, pvcFrameRecovery, rebarTons, streamTons } from "./scenario.js?v=service-recovery-20261123";
 
 export const CATEGORY_LABEL = {
   wall: "벽", slab: "슬래브", beam: "보", column: "기둥", footing: "기초", stair: "계단", roof: "지붕",
@@ -267,7 +267,14 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
   const pvcPrice = (q.pvcPrice ?? 0) * 1000;
   const isPvcFrame = (el, part) => q.pvcFrameTons > 0 && part.stream === "resin"
     && (el.category === "window" || part.windowAssembly);
+  const serviceShare = (item, key) => {
+    const method = item.methods[mode];
+    const total = Math.max(item.model.kg, item.treatmentKg, method.soldKg ?? 0);
+    return total > 0 ? (method[key] ?? 0) / total : 0;
+  };
   const partFee = (el, part) => {
+    const item = scenario?.services?.[el.serviceKind];
+    if (item) return serviceShare(item, "residueKg") * p.fee_mixed_unverified;
     if (isPvcFrame(el, part)) return pvcShare * cost(pvcPrice) + (1 - pvcShare) * mixedFee;
     if (q.windowMode && part.stream === "glass" && (el.category === "window" || el.parts.some(x => x.windowAssembly))) {
       return p.fee_mixed_unverified;
@@ -275,6 +282,8 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
     return fee(part.stream);
   };
   const partPrice = (el, part) => {
+    const item = scenario?.services?.[el.serviceKind];
+    if (item) return serviceShare(item, "soldKg") * item.price * 1000;
     if (isPvcFrame(el, part)) return pvcShare * gain(pvcPrice);
     if (q.windowMode && part.stream === "aluminum" && (el.category === "window" || part.windowAssembly)) {
       return q.alPrice == null ? p.price_aluminum : q.alPrice * 1000;
@@ -292,7 +301,7 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
   return classified.map((el) => ({
     globalId: el.globalId, tag: el.tag, category: el.category, floor: el.floor, stream: el.stream,
     // 처리 방식은 실제로 적용한 작업이다. 철근 회수 효과는 아래 금액(공법별 회수율)에 반영한다.
-    method: el.stream === EXCLUDED ? "제외" : sel && SEPARATED.has(el.stream) ? "분별 해체" : "압쇄 해체",
+    method: el.stream === EXCLUDED ? "제외" : sel && (el.serviceKind || SEPARATED.has(el.stream)) ? "분별 해체" : "압쇄 해체",
     tons: el.tons,
     disposal: el.parts.reduce((s, x) => s + (x.tons - rebarOf(el, x)) * partFee(el, x)
       + (q.fixedComparison && x.stream === "metal" && el.category !== "rebar" ? x.tons * (1 - (q.steelWork && isStructuralSteelPart(el, x) ? p.rec_structural_steel ?? p.rec_scrap_sel : scrapRecovery)) * p.fee_mixed_unverified : 0)
