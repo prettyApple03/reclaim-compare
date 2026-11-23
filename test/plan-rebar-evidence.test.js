@@ -91,6 +91,8 @@ test("직접 입력한 계획서도 명시된 RC 단면과 실제 IFC 재료가 
 test("천마의 집 무근 바닥처럼 부재명에만 비구조 조건이 있어도 후보에서 제외하고 층별 확인값은 우선한다", () => {
   const names = ["1층 바닥(무근콘크리트 THK150) 구간2","버림 콘크리트","비구조 토핑","바닥 모르타르","Plain concrete slab"];
   const source = names.map(name => element("slab",name,"Concrete"));
+  const taggedComposite=classifyElements([element("wall","외벽 1층 1","외벽(복합)")],rates,{},"aluminum",{verifiedStructuralConcrete:true});
+  near(quantitiesFromElements(taggedComposite,100).rebarConcrete_m3,0);
   for (const options of [{}, { verifiedStructuralConcrete:true }]) {
     const es = classifyElements(source,rates,{},"aluminum",options);
     const q=quantitiesFromElements(es,100);

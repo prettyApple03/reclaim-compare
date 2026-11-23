@@ -121,6 +121,8 @@ export function classify(el, rates, overrides = {}, unknownFrame = "aluminum", o
       }
     } else {
       const constituents = new Set(named.map(l => l.cls).filter(Boolean));
+      const verifiedUntagged = options.verifiedStructuralConcrete && STRUCTURAL.has(el.category)
+        && !named.some(l => l.name || l.category) && !nonRebarConcrete.test(el.name ?? "");
       const planMember = isPlanRebarMember(el, options.rebarEvidence) && (named.length === 1
         && named[0].cls === "concrete" && !nonRebarConcrete.test([named[0].name, named[0].category, el.name].join(" "))
         || named.length === 0 && options.rebarEvidence.allowUntagged && !impliedSteel(el));
@@ -130,20 +132,20 @@ export function classify(el, rates, overrides = {}, unknownFrame = "aluminum", o
         // 재료가 없으면 ① 수량표 중량/형상 부피로 본 밀도, ② 부재 이름(예: "System Panel: Glazed") 순으로 추정한다.
         // 재료 없는 강재 보를 콘크리트(2.4t/㎥)로, 유리 패널을 강재(7.85t/㎥)로 세는 것을 막는다.
         cls = (impliedSteel(el) ? "metal" : null) || materialClass(el.name)
-          || (planMember || options.verifiedStructuralConcrete && STRUCTURAL.has(el.category) ? "concrete" : "unknown");
+          || (planMember || verifiedUntagged ? "concrete" : "unknown");
       }
       const knownWeight = Number.isFinite(el.weightTons) && el.weightTons >= 0 ? el.weightTons : undefined;
       const part = push(cls, el.volume, cls === "unknown" ? knownWeight : undefined, {
         layer: named.find(l => l.cls)?.name || el.name || "재료 없음",
         reason: constituents.size > 1 ? "두께·구성비 없는 복합 재료" : undefined,
         reinforced: cls === "concrete" && (planMember || hasRebarDesignation(named.map(l => l.name + " " + l.category).join(" ") + " " + (el.name ?? ""))
-          || options.verifiedStructuralConcrete && STRUCTURAL.has(el.category) && !nonRebarConcrete.test([el.name, ...named.map(l => l.name)].join(" "))),
+          || verifiedUntagged),
       });
       if (planMember && part.reinforced) {
         part.rebarBasis = "plan-structural-member-estimate";
         if (!named.length) part.massBasis = "plan-structural-member-estimate";
       }
-      if (options.verifiedStructuralConcrete && STRUCTURAL.has(el.category) && cls === "concrete" && !named.some(l => l.cls)) part.massBasis = "verified-rc-structure-assumption";
+      if (verifiedUntagged && cls === "concrete") part.massBasis = "verified-rc-structure-assumption";
       if (knownWeight != null && cls === "unknown") {
         part.massBasis = "ifc-weight";
         quantityIssues.push(`${el.name || CATEGORY_LABEL[el.category]}: IFC 중량은 있으나 폐기물 성상 미확인`);
