@@ -15,26 +15,33 @@ export const legend = (items) => `<div class="legend">${items.map(([label, color
 // 두 안의 비용 구성: 0의 오른쪽에 비용을 쌓고, 왼쪽에 매각수익을 둔다
 export function stackedBars(scenarios) {
   const W = 760, L = 96, R = 150, rowH = 44, gap = 22, top = 8;
-  const maxCost = Math.max(...scenarios.map((s) => COST_PARTS.reduce((sum, [key]) => sum + (s[key] ?? 0), 0)));
-  const maxRev = Math.max(...scenarios.map((s) => s.revenue));
-  const k = (W - L - R) / (maxCost + maxRev), x0 = L + maxRev * k;
+  const maxCost = Math.max(0, ...scenarios.map((s) => COST_PARTS.reduce((sum, [key]) => sum + (s[key] ?? 0), 0)));
+  const maxRev = Math.max(0, ...scenarios.map((s) => s.revenue ?? 0));
+  const k = (W - L - R) / (maxCost + maxRev || 1), x0 = L + maxRev * k;
   const H = top + scenarios.length * (rowH + gap);
+  const segment = (x, y, width, color, tip) => {
+    const inset = Math.min(1, width / 8);
+    return `<rect x="${x + inset}" y="${y}" width="${width - 2 * inset}" height="${rowH}" rx="3" fill="${color}" data-tip="${esc(tip)}"/>`;
+  };
   let out = "";
   scenarios.forEach((s, i) => {
     const y = top + i * (rowH + gap);
     let x = x0;
     for (const [key, label, color] of COST_PARTS) {
       const w = (s[key] ?? 0) * k;
-      if (w > 0.5) out += `<rect x="${x + 1}" y="${y}" width="${Math.max(0, w - 2)}" height="${rowH}" rx="3" fill="${color}" data-tip="${esc(`${s.name} · ${label}: ${mil(s[key])}백만원`)}"/>`;
+      if (w > 0) out += segment(x, y, w, color, `${s.name} · ${label} ${num(s[key])}원`);
       x += w;
     }
-    const rw = s.revenue * k;
-    out += `<rect x="${x0 - rw + 1}" y="${y}" width="${Math.max(0, rw - 2)}" height="${rowH}" rx="3" fill="${REVENUE_COLOR}" data-tip="${esc(`${s.name} · 매각수익: −${mil(s.revenue)}백만원`)}"/>`;
+    const rw = (s.revenue ?? 0) * k;
+    if (rw > 0) out += segment(x0 - rw, y, rw, REVENUE_COLOR, `${s.name} · 매각수익 −${num(s.revenue)}원`);
     out += `<text x="${L - 86}" y="${y + rowH / 2 + 5}" class="c-label">${esc(s.name)}</text>`;
-    out += `<text x="${x + 8}" y="${y + rowH / 2 - 2}" class="c-value">${mil(s.total)}백만원</text><text x="${x + 8}" y="${y + rowH / 2 + 14}" class="c-note">순비용 · ${num(s.days)}일</text>`;
+    out += `<text x="${W - 12}" y="${y + rowH / 2 - 2}" text-anchor="end" class="c-value">${num(s.total)}원</text>`;
+    out += `<text x="${W - 12}" y="${y + rowH / 2 + 14}" text-anchor="end" class="c-note">순비용 · ${num(s.days, 1)}일</text>`;
   });
   out += `<line x1="${x0}" x2="${x0}" y1="0" y2="${H - gap + 6}" class="c-axis"/>`;
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="두 안의 비용 구성 비교">${out}</svg>`
+  out += `<text x="${x0}" y="${H - 3}" text-anchor="middle" class="c-note">0원</text>`;
+  const description = scenarios.map(s => `${s.name} 순비용 ${num(s.total)}원`).join(", ");
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="비용 구성 비교 · ${esc(description)}">${out}</svg>`
     + legend([...COST_PARTS.map(([, l, c]) => [l, c]), ["매각수익 (비용에서 뺌)", REVENUE_COLOR]]);
 }
 

@@ -103,6 +103,14 @@ test("총액은 내역의 합이며 분별 보조 장비는 추가 작업에만 
   assert.ok(Math.abs(selective.equipment - crush.equipment - estimated) < 1e-6);
   const quoted = compare({ ...q, selectiveEquipmentQuote: 1200000 }, p);
   assert.ok(Math.abs(quoted.selective.equipment - quoted.crush.equipment - 1200000) < 1e-6);
+  const confirmed = compare({ ...q, selectiveEquipmentHours: 2.5 }, p);
+  assert.ok(Math.abs(confirmed.selective.equipment - confirmed.crush.equipment - 2.5 * p.selective_equipment_per_h) < 1e-6);
+  assert.equal(confirmed.selective.days, selective.days);
+  assert.equal(confirmed.selective.revenue, selective.revenue);
+  const noExtra = compare({ ...q, selectiveEquipmentHours: 0 }, p);
+  assert.equal(noExtra.selective.equipment, noExtra.crush.equipment);
+  const quotedHours = compare({ ...q, selectiveEquipmentHours: 2.5, selectiveEquipmentQuote: 1200000 }, p);
+  assert.equal(quotedHours.selective.equipment, quoted.selective.equipment);
   const parallel = compare({ ...q, overlap: 1 }, p);
   assert.equal(parallel.selective.equipment, selective.equipment);
   assert.ok(selective.labor > crush.labor && selective.disposal < crush.disposal && selective.days > crush.days);

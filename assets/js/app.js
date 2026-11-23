@@ -1,19 +1,19 @@
 // 화면과 상태. 계산은 scenario.js / sensitivity.js / classify.js가 한다.
-import { selectiveEquipmentHoursPerDay, costScenario, concreteCut, officeSalvage, steelDismantling, compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES, concreteGrades, streamTons, PRESS_FINISH_BASELINE, workScheduleIssues } from "./scenario.js?v=concrete-cut-20261123";
-import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validationCases, comparableCases, calibrateStructure, benchmark } from "./calibration.js?v=concrete-cut-20261123";
-import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js?v=concrete-cut-20261123";
+import { selectiveEquipmentHoursPerDay, costScenario, concreteCut, officeSalvage, steelDismantling, compare, paramValues, quantitiesFromArea, paperMode, schedule, STREAMS, STREAM_LABEL, SEPARATED, SITES, LABOR_METHODS, EQUIPMENT, equipmentMode, selExtra, CONCRETE_CASES, concreteGrades, streamTons, PRESS_FINISH_BASELINE, workScheduleIssues } from "./scenario.js?v=equipment-compare-20261123";
+import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validationCases, comparableCases, calibrateStructure, benchmark } from "./calibration.js?v=equipment-compare-20261123";
+import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js?v=equipment-compare-20261123";
 import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=scope-report-20261123";
-import { COST_PARTS, REVENUE_COLOR, stackedBars, tornadoChart, histChart, legend, mil, num } from "./charts.js";
+import { COST_PARTS, REVENUE_COLOR, stackedBars, tornadoChart, histChart, legend, mil, num } from "./charts.js?v=equipment-compare-20261123";
 import { ifcScopeElements } from "./ifc.js?v=scope-report-20261123";
 import { reportHtml, kstStamp, fitSchedules } from "./report.js?v=scope-report-20261123";
-import { concreteCutCandidates } from "./concrete-cut.js?v=concrete-cut-20261123";
+import { concreteCutCandidates } from "./concrete-cut.js?v=equipment-compare-20261123";
 import { concreteCutControls, concreteCutInput, cutProjectFields } from "./cut-controls.js?v=concrete-cut-20261123";
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const json = async (f) => (await fetch(`assets/data/${f}`)).json();
 const [rates, paper, validationDoc, kalisCases] = await Promise.all([
-  json("rates.json?v=ifc-finish-flow-1"), json("paper2023_case.json"), json("plan-validation.json"),
+  json("rates.json?v=equipment-compare-20261123"), json("paper2023_case.json"), json("plan-validation.json"),
   json("plans/kalis/index.json?v=scope-report-20261123").then(d => d.items ?? []).catch(() => []),
 ]);
 const sampleCases = validationCases(validationDoc);
@@ -59,7 +59,7 @@ const workScheduleFields = {
 };
 const workKey = (field, suffix) => "work" + field[0].toUpperCase() + field.slice(1) + suffix;
 const workFields = concreteCutModes.flatMap(([, , suffix]) => Object.keys(workScheduleFields).map(field => workKey(field, suffix)));
-const caseFields = ["scopeConfirmed", "includeBasementCap", "includeFoundation", "asbestosStatus", ...workFields, ...cutProjectFields, "selectiveEquipmentQuote", "height", "equipment", "scope", "structure", "scaffold", "equipmentCrewPeriod", "craneDays", "parallelGain", "overlap", "mixedMineral", "mixedCombustible",
+const caseFields = ["scopeConfirmed", "includeBasementCap", "includeFoundation", "asbestosStatus", ...workFields, ...cutProjectFields, "selectiveEquipmentQuote", "selectiveEquipmentHours", "height", "equipment", "scope", "structure", "scaffold", "equipmentCrewPeriod", "craneDays", "parallelGain", "overlap", "mixedMineral", "mixedCombustible",
   "cleanCrush", "cleanSel", "cleanPrice", "transportCrush", "transportSel", "cableCrush", "cableSel", "cablePrice", "cableCommon", "copperPipeSold", "pipeInstalled", "cableInstalled", "officeMaterials", ...frameFields, ...disposalFields, "glassPdPerM2", "mountedBucket", "mountedLarge", "carpenterShare", "boardM2", "tileM2", "pvcM2", "alM2", "generalFinishPd", "panelTons", "groundFloors", "mountedProduction", "smallHours", "largeHours", "smallPrice", "largePrice", "concurrentHours", "cutSel", "cutCrush", "cutCommon", "steelTons", ...concreteCutFields, "openSteelCrushQuote", "openSteelSelectiveQuote", "openSteelCrushDays", "openSteelSelectiveDays"];
 const defaultSiteInputs = { equipment: "auto", scope: "unknown", structure: "rc", scaffold: "yes", site: "normal", equipmentCrewPeriod: "structure" };
 const settings = ["area", "floors", "usage", "site", "labor", ...caseFields];
@@ -140,7 +140,7 @@ function projectInputs() {
     craneDays: state.craneDays, groundFloors: state.groundFloors, mountedProduction: state.mountedProduction, parallelGain: (state.parallelGain ?? 0) / 100, overlap: (state.overlap ?? 0) / 100,
     mixedMineral: (state.mixedMineral ?? 0) / 100, mixedCombustible: (state.mixedCombustible ?? 0) / 100,
     transportCrush: state.transportCrush, transportSel: state.transportSel,
-    selectiveEquipmentQuote: state.selectiveEquipmentQuote,
+    selectiveEquipmentQuote: state.selectiveEquipmentQuote, selectiveEquipmentHours: state.selectiveEquipmentHours,
     workSchedule: Object.fromEntries(concreteCutModes.map(([mode, , suffix]) => [mode,
       Object.fromEntries(Object.keys(workScheduleFields).map(field => [field, state[workKey(field, suffix)]])),
     ])),
@@ -573,7 +573,8 @@ function modelTab(d) {
           <label><input type="checkbox" data-set="officeMaterials" ${officeRecoveryEnabled() ? "checked" : ""}> 사무소 시나리오 · 입력이 없는 품목을 면적으로 추정</label>
           </details>
           </fieldset>
-          ${numeric("selectiveEquipmentQuote", "분별 선철거·선별 추가 장비 견적 (원)", { placeholder: "별도 견적이 있을 때 입력" })}
+          ${numeric("selectiveEquipmentHours", "분별 추가 보조 장비 총 가동시간 (h)", { placeholder: "미입력 시 추가 작업일로 추정" })}
+          ${numeric("selectiveEquipmentQuote", "분별 선철거·선별 추가 장비 견적 (원)", { placeholder: "입력 시 가동시간 산정 대체" })}
           ${numeric("transportCrush", "일괄 압쇄 수집·운반 견적 (원, VAT 별도)")}
           ${numeric("transportSel", "전면 분별 수집·운반 견적 (원, VAT 별도)")}
           <p class="caption muted">현장에서 처리장까지 별도로 지불하는 수집·운반비만 입력하세요. 처리 견적에 포함된 운반비는 0원을 입력하고, 비용 자체를 모르면 비워두세요.</p>
@@ -937,7 +938,7 @@ function extraLaborBreakEven(q, p, cmp, work) {
   const extendedDaysPerPd = q.workSchedule?.selective?.totalDays != null ? 0 : (1 - q.overlap) / p.crew_size;
   const excavatorCrew = q.equipmentCrewPeriod === "all"
     && cmp.selective.equipmentCrewDays > 0 ? crew.structure : 0;
-  const equipmentPerPd = q.selectiveEquipmentQuote == null
+  const equipmentPerPd = q.selectiveEquipmentQuote == null && q.selectiveEquipmentHours == null
     ? selectiveEquipmentHoursPerDay(p) * (p.selective_equipment_per_h ?? 0) / p.crew_size : 0;
   const costPerPd = equipmentPerPd + p.wage_laborer * (1 - carpenterShare) + p.wage_carpenter * carpenterShare
     + extendedDaysPerPd * (p.indirect_per_day + p.wage_laborer * (crew.standing + excavatorCrew));
@@ -996,7 +997,7 @@ function comparisonThresholds(q, p, cmp, work) {
 
 function extraEquipmentAllowance(q, cmp) {
   if (q.selectiveEquipmentQuote != null || cmp.unpricedCuts.length) return "";
-  const estimate = cmp.selective.rows.find(row => row.item === "분별 선철거·선별 소형 장비 (추정)")?.amount ?? 0;
+  const estimate = cmp.selective.rows.find(row => row.item.startsWith("분별 선철거·선별 소형 장비"))?.amount ?? 0;
   const remaining = estimate - cmp.delta;
   const result = remaining > 0.005
     ? "분별의 추가 장비비가 " + num(remaining) + "원이면 두 안의 순비용이 같습니다."
@@ -1006,6 +1007,14 @@ function extraEquipmentAllowance(q, cmp) {
 
 function scheduleBasisLabel(scheduleData) {
   return ({input:"입력 공정표", "crush-reference":"압쇄 공정표에서 추정", estimate:"기본 산식"})[scheduleData.sources?.total] ?? "기본 산식";
+}
+
+function selectiveEquipmentBasis(q, p, selectiveDays) {
+  if (q.selectiveEquipmentQuote != null) return `현장 견적 ${num(q.selectiveEquipmentQuote)}원`;
+  const unitRate = num(p.selective_equipment_per_h ?? 0) + "원/h";
+  if (q.selectiveEquipmentHours != null) return `확인 가동시간 ${num(q.selectiveEquipmentHours, 2)}시간 × ${unitRate}`;
+  if (!selectiveDays) return "추가 작업량 0으로 추정 장비비 0원";
+  return `추가 작업 ${num(selectiveDays, 2)}일 × 하루 ${num(selectiveEquipmentHoursPerDay(p), 1)}시간 × ${unitRate} (추정)`;
 }
 
 function compareTab(d) {
@@ -1022,6 +1031,11 @@ function compareTab(d) {
   const { hasUnpricedDisposal } = cmp;
   const steel = steelDismantling(q);
   const boardBreakEven = breakEvenBoardShare(q,p);
+  const equipmentDelta = selective.equipment - crush.equipment;
+  const signedAmount = value => `${Math.round(value) > 0 ? "+" : ""}${num(Math.round(value) || 0)}`;
+  const equipmentRate = crush.equipment > 0 && Math.round(equipmentDelta) !== 0
+    ? ` (${equipmentDelta > 0 ? "+" : ""}${num(equipmentDelta / crush.equipment * 100, 2)}%)` : "";
+  const totalDigits = mil(crush.total) === mil(selective.total) && Math.round(delta) !== 0 ? 2 : 1;
   const simulationScope = q.labor === "quantity" ? "보드 60%·타일 100% 공통 선철거율 고정" : "논문 공수 방식 · 선철거율을 변동하지 않음";
   const withSupplement = enabled => {
     const t = { ...q.t, wood: q.raw.t.wood, resin: q.raw.t.resin, mixed: q.raw.t.mixed };
@@ -1095,19 +1109,18 @@ function compareTab(d) {
       <p class="caption muted">설정 범위의 포함 항목 기준 5,000회 시행 중 ${num(sim.pSelective * 100, 1)}%에서 분별 순비용이 더 낮았습니다. ${simulationScope}. 결과는 설정한 탐색 범위와 삼각분포에 따릅니다.</p>
     </section>
     <section class="kpis">
-      <div class="card kpi"><div class="v">${mil(crush.total)}</div><div class="l">일괄 압쇄 순비용 (백만원)${steel.excluded ? " · 철골비 별도" : ""}</div><div class="s">공기 ${num(crush.days)}일</div></div>
-      <div class="card kpi"><div class="v">${mil(selective.total)}</div><div class="l">전면 분별해체 순비용 (백만원)${steel.excluded ? " · 철골비 별도" : ""}</div><div class="s">공기 ${num(selective.days)}일 (${cmp.deltaDays >= 0 ? "+" : ""}${num(cmp.deltaDays, 1)}일)</div></div>
-      <div class="card kpi"><div class="v">${delta > 0 ? "+" : delta < 0 ? "−" : ""}${mil(Math.abs(delta))}</div><div class="l">Δ = 분별 − 압쇄 (백만원)</div><div class="s">${d.basis ? esc(d.basis) + " · " : ""}음수면 분별이 유리</div></div>
+      <div class="card kpi"><div class="v">${mil(crush.total, totalDigits)}</div><div class="l">일괄 압쇄 순비용 (백만원)${steel.excluded ? " · 철골비 별도" : ""}</div><div class="s">공기 ${num(crush.days, 1)}일</div></div>
+      <div class="card kpi"><div class="v">${mil(selective.total, totalDigits)}</div><div class="l">전면 분별해체 순비용 (백만원)${steel.excluded ? " · 철골비 별도" : ""}</div><div class="s">공기 ${num(selective.days, 1)}일 (${cmp.deltaDays >= 0 ? "+" : ""}${num(cmp.deltaDays, 1)}일)</div></div>
+      <div class="card kpi"><div class="v">${signedAmount(delta)}</div><div class="l">순비용 차이 (분별 − 압쇄, 원)</div><div class="s">${d.basis ? esc(d.basis) + " · " : ""}음수면 분별이 유리</div></div>
       <div class="card kpi"><div class="v">${num(sim.pSelective * 100, 1)}%</div><div class="l">설정 범위에서 분별 순비용이 낮은 시행 비율</div><div class="s">${num(sim.n)}회 · ${simulationScope}</div></div>
     </section>
     <section class="card"><h2>비용 구성</h2>
-      <p><strong>장비비</strong> · 압쇄 ${num(crush.equipment)}원 / 분별 ${num(selective.equipment)}원</p>
+      <p><strong>장비비</strong> · 압쇄 ${num(crush.equipment)}원 / 분별 ${num(selective.equipment)}원 · <strong>차이 ${signedAmount(equipmentDelta)}원${equipmentRate}</strong></p>
       ${[["압쇄", crush], ["분별", selective]].filter(([, result]) => result.cut.area > 0).map(([label, result]) => {
         const cut = result.cut;
         return `<p class="caption muted">${label} 절단 ${num(cut.area, 3)}㎡ · ${num(cut.cost)}원${cut.quoteMissing ? " 반영 · 미확정 항목 있음" : cut.costBasis === "reference" ? " · 참고단가 포함" : " · 도급·인양 견적"}${cut.avoidedHoursApplied > 0 ? ` · 굴착기 ${num(cut.avoidedHoursApplied, 1)}시간 차감` : ""}</p>`;
       }).join("")}
-      ${q.selectiveEquipmentQuote == null && selective.schedule.selective > 0 ? `<p class="caption muted">분별 보조 장비 · 추가 작업 ${num(selective.schedule.selective, 2)}일 × 하루 ${num(selectiveEquipmentHoursPerDay(p), 1)}시간 × ${num(p.selective_equipment_per_h ?? 0)}원/h (추정)</p>` : ""}
-      ${q.selectiveEquipmentQuote == null && selective.schedule.selective === 0 ? '<p class="caption muted">추가 분별 공수가 0인·일이면 공통 장비비를 적용합니다.</p>' : ""}
+      <p class="caption muted">분별 보조 장비 · ${selectiveEquipmentBasis(q, p, selective.schedule.selective)}</p>
       ${extraEquipmentAllowance(q, cmp)}
       <p>공기 ${num(crush.days, 1)}일 → ${num(selective.days, 1)}일 · 간접비 차이 ${mil(selective.indirect - crush.indirect, 2)}백만원</p>
       <p>분별 추가 매각수익 ${mil(selective.revenue-crush.revenue,2)}백만원 · 처리비 절감 ${mil(crush.disposal-selective.disposal,2)}백만원 · 추가 인건비 ${mil(selective.labor-crush.labor,2)}백만원</p>${stackedBars([{ ...crush, name: "일괄 압쇄" }, { ...selective, name: "전면 분별" }])}</section>

@@ -274,9 +274,12 @@ export function costScenario(q, p, mode) {
 
   if (sel && q.selectiveEquipmentQuote != null) {
     equipment += add("장비비", "분별 선철거·선별 추가 장비 (견적)", 1, "식", q.selectiveEquipmentQuote);
-  } else if (sel && sched.selective > 0) {
-    const hours = sched.selective * selectiveEquipmentHoursPerDay(p);
-    equipment += add("장비비", "분별 선철거·선별 소형 장비 (추정)", hours, "h", p.selective_equipment_per_h ?? 0);
+  } else if (sel) {
+    const hours = q.selectiveEquipmentHours ?? sched.selective * selectiveEquipmentHoursPerDay(p);
+    if (hours > 0) {
+      const basis = q.selectiveEquipmentHours == null ? "추정" : "가동시간 입력";
+      equipment += add("장비비", `분별 선철거·선별 소형 장비 (${basis})`, hours, "h", p.selective_equipment_per_h ?? 0);
+    }
   }
   if (cut.active && cut.ready) {
     if (cut.area != null) {

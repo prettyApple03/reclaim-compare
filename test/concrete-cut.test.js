@@ -26,6 +26,19 @@ test("IFC 재료 층은 metre로 환산하고 회전된 벽의 외접 폭은 두
   assert.equal(concreteCutCandidates([rotated], { lengthScale: 0.001 }, "partial")[0].thickness, null);
 });
 
+test("지붕 마감과 일반 코어 계단은 후보에서 빼고 구조 지붕 및 코어벽을 남긴다", () => {
+  const element = (id, category, name, attributes = {}) => ({ ...concreteWall, globalId: id, category, name, ...attributes });
+  const slate = { name: "골형 슬레이트 (성분 미확인)" };
+  const candidates = concreteCutCandidates([
+    element("covering", "roof", "슬레이트 경사지붕", { guessed: true, layers: [slate] }),
+    element("slab", "roof", "철근콘크리트 지붕", { guessed: true, layers: [slate, { name: "철근콘크리트" }] }),
+    element("flight", "stair", "B1 코어 계단 디딤단"),
+    element("landing", "slab", "코어 계단 참", { predefined: "LANDING", roofLevel: true }),
+    concreteWall,
+  ], null, "partial");
+  assert.deepEqual(candidates.map(({ id, reasonCode }) => [id, reasonCode]), [["slab", "roof"], ["wall-id", "core"]]);
+});
+
 test("공통 절단면과 개별 면적을 합산하고 중복 및 현재 범위 밖 부재를 제외한다", () => {
   const candidate = { id: "wall-id" };
   const plan = normalizeConcreteCutPlan([

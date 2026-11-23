@@ -5,10 +5,20 @@ const cutModes = { both: ["crush", "selective"], crush: ["crush"], selective: ["
 const cutTools = new Set(["wire", "wall", "other"]);
 const perimeterName = /외벽|외곽|돌출|캔틸레버|파라펫|난간벽|\b(?:parapet|cantilever)\b|\b(?:exterior|external|outer|end)[ -]+(?:wall|beam|slab)\b/i;
 const coreName = /코어|샤프트|승강기|엘리베이터|전단벽|\b(?:core|shaft|stairwell|elevator)\b|\bshear[ -]+wall\b/i;
+const stairPartName = /디딤단|디딤판|계단\s*참|\b(?:landing|tread)\b/i;
+const roofCoverName = /슬레이트|경량\s*경사지붕\s*마감|\bslate\b/i;
 const geometryByModel = new WeakMap();
 const positive = value => Number.isFinite(value) && value > 0;
 const text = value => typeof value === "string" ? value.trim() : "";
 const idOf = el => el.globalId || (el.expressID != null ? String(el.expressID) : "");
+
+function isRoofCovering(el) {
+  if (!horizontalSlabs.has(el.category) || !el.guessed) return false;
+  const layers = el.layers ?? [];
+  // 지붕 유형만으로 콘크리트로 추정된 마감은 절단 후보에서 뺀다. 콘크리트층이 있는 복합 지붕은 검토할 수 있다.
+  return layers.length ? layers.every(layer => roofCoverName.test(layer.name) || roofCoverName.test(layer.category))
+    : roofCoverName.test(el.name);
+}
 
 function meshBounds(model) {
   if (!model) return new Map();
@@ -140,9 +150,11 @@ export function concreteCutCandidates(classified, model, scope) {
     const { el, id, dimensions } = member;
     const concrete = (el.parts ?? []).filter(part => part.stream === "concrete" && positive(part.m3));
     const volume = concrete.reduce((sum, part) => sum + part.m3, 0);
-    if (!id || !positive(volume)) continue;
-    let reasonCode;
+    if (!id || !positive(volume) || isRoofCovering(el)) continue;
     const namedPerimeter = perimeterName.test(el.name) || el.predefined === "PARAPET";
+    const stairPart = el.category === "stair" || (el.category === "slab" && (el.predefined === "LANDING" || stairPartName.test(el.name)));
+    if (stairPart && !namedPerimeter) continue;
+    let reasonCode;
     if (hasBasement && el.basementCap) reasonCode = "basementBoundary";
     else if (el.category === "roof" || (el.roofLevel && (horizontalSlabs.has(el.category) || namedPerimeter))) reasonCode = "roof";
     else if (coreName.test(el.name)) reasonCode = "core";
