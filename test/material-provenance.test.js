@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { classify, classifyElements, quantitiesFromElements, materialClass, connectFinishTakeoff, groupKey, elementResults } from "../assets/js/classify.js";
-import { paramValues, streamTons, costScenario } from "../assets/js/scenario.js";
+import { paramValues, streamTons, costScenario, compare, selExtra, PRESS_FINISH_BASELINE } from "../assets/js/scenario.js";
 
 const rates = JSON.parse(readFileSync(new URL("../assets/data/rates.json", import.meta.url)));
 const params = paramValues(rates);
@@ -79,6 +79,39 @@ test("IFC 보충 OFF에서는 없는 보드·타일을 만들지 않고 확인�
   connectFinishTakeoff(supplemented, raw, rates, params);
   assert.ok(supplemented.t.board > 0);
   assert.equal(supplemented.finishTakeoff.board.source, "area-supplement-assumption");
+});
+
+test("구조 전용 IFC의 마감재 추정은 공법별 공수를 만들고 물량 출처와 판정 보류를 유지한다", () => {
+  const raw = quantitiesFromElements([classify(el("RC벽", [{ name: "철근콘크리트", thickness: 0 }]), rates)], 1000);
+  const q = { ...raw, labor: "quantity", finishBaseline: PRESS_FINISH_BASELINE,
+    windowMode: "both", windowArea: 0, estimateMissingFinishes: true };
+  connectFinishTakeoff(q, raw, rates, params);
+  assert.equal(q.finishTakeoff.board.source, "area-finish-assumption");
+  near(q.t.board, 1000 * params.int_board_ratio * rates.density.board * rates.finishThickness.board);
+  near(selExtra(q, params).persons, (1 - PRESS_FINISH_BASELINE.board) * q.finishAreas.board / params.int_board_m2_per_day);
+  const estimate = compare(q, params);
+  assert.ok(estimate.selective.total > estimate.crush.total);
+  assert.equal(estimate.crush.revenue, estimate.selective.revenue);
+  assert.ok(estimate.completeness.missing.some(issue => issue.code === "finish-assumption"));
+  assert.equal(estimate.recommended, null);
+
+  const excluded = { ...q, finishAreas: raw.finishAreas, finishAreaExclusions: { board: 700, floor: 250 } };
+  connectFinishTakeoff(excluded, raw, rates, params);
+  near(excluded.finishAreas.board, 1000 * params.int_board_ratio - 700);
+  near(excluded.finishAreas.tile, 750 * params.int_tile_ratio);
+
+  const measured = { ...q, finishAreas: { board: 120 }, boardWeight: 0, tileWeight: 2 };
+  connectFinishTakeoff(measured, raw, rates, params);
+  assert.equal(measured.finishAreas.board, 0);
+  assert.equal(measured.t.board, 0);
+  assert.equal(measured.t.tile, 2);
+  assert.ok(!compare(measured, params).completeness.missing.some(issue => issue.code.startsWith("finish-")));
+
+  const modelOnly = { ...q, finishAreas: raw.finishAreas, finishQuantityMode: "ifc", supplemented: true };
+  connectFinishTakeoff(modelOnly, raw, rates, params);
+  assert.equal(modelOnly.t.board, 0);
+  assert.equal(modelOnly.t.tile, 0);
+  assert.ok(compare(modelOnly, params).completeness.missing.some(issue => issue.code === "finish-missing"));
 });
 
 test("확인한 RC 구조 기본값은 무재료 단일 부재에만 적용하고 복합 미확정 층을 덮지 않는다", () => {

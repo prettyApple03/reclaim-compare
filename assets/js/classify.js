@@ -1,5 +1,5 @@
 // IFC 부재(종류·재료 층·부피·면적) → 폐기물 성상별 톤수. DOM·web-ifc를 쓰지 않는다.
-import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js?v=salvage-20261123";
+import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js?v=finish-compare-20261123";
 import { hasRebarDesignation, isPlanRebarMember, nonRebarConcrete } from "./rebar-evidence.js?v=salvage-20261123";
 
 export const CATEGORY_LABEL = {
@@ -341,14 +341,21 @@ export function connectFinishTakeoff(q, raw, rates, params) {
     const measured = inputWeight ?? raw.t[key];
     const hasWeight = inputWeight != null || measured > 0;
     const modeledArea = q.finishAreas[key];
-    const noIfcSupplement = (q.basis === "IFC" || raw.basis === "IFC") && !q.supplemented;
+    const useArea = q.finishQuantityMode !== "ifc" && (q.estimateMissingFinishes || q.supplemented);
+    const noIfcSupplement = (q.basis === "IFC" || raw.basis === "IFC") && !useArea;
     const unverified = (q.finishFallbackDisabled || noIfcSupplement) && !hasWeight && modeledArea == null;
-    const area = modeledArea ?? (hasWeight ? measured / tonsPerArea : unverified ? 0 : q.area_m2 * params["int_" + key + "_ratio"]);
+    const excluded = q.finishAreaExclusions ?? {};
+    const referenceArea = key === "board"
+      ? Math.max(0, q.area_m2 * params.int_board_ratio - (excluded.board ?? 0))
+      : Math.max(0, q.area_m2 - (excluded.floor ?? 0)) * params.int_tile_ratio;
+    const area = inputWeight === 0 ? 0
+      : modeledArea ?? (hasWeight ? measured / tonsPerArea : unverified ? 0 : referenceArea);
     const tons = hasWeight ? measured : area * tonsPerArea;
     q.finishAreas[key] = area;
     q.t[key] = tons;
-    q.finishTakeoff[key] = { area, tons, estimatedWeight: !hasWeight && !unverified, estimatedArea: modeledArea == null && !unverified, unverified,
-      source: inputWeight != null ? "manual-weight" : measured > 0 ? "ifc-material-volume" : modeledArea != null ? "manual-or-ifc-area" : unverified ? "not-modeled" : "area-supplement-assumption" };
+    q.finishTakeoff[key] = { area, tons, estimatedWeight: !hasWeight && !unverified, estimatedArea: inputWeight !== 0 && modeledArea == null && !unverified, unverified,
+      source: inputWeight != null ? "manual-weight" : measured > 0 ? "ifc-material-volume" : modeledArea != null ? "manual-or-ifc-area"
+        : unverified ? "not-modeled" : q.estimateMissingFinishes ? "area-finish-assumption" : "area-supplement-assumption" };
     if (!hasWeight) estimated += tons;
   }
   const untyped = Math.max(0, 1 - (q.mixedMineral ?? 0) - (q.mixedCombustible ?? 0));

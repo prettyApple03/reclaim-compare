@@ -641,6 +641,11 @@ export function compare(q, p) {
   if (q.concreteCase && q.concreteCase !== "building" && !q.concreteGradesConfirmed) missing.push({ code: "concrete-grades", item: "콘크리트 반입 성상", reason: "기존 66/26/8 등 성상비율과 순수 콘크리트 단가는 명시적 비교 가정입니다. 현장 반입조건·견적을 확인하세요." });
   const unknownVolume = q.unresolvedMaterialVolume_m3 ?? 0;
   if (unknownVolume > 1e-9) missing.push({ code: "quantity-material", item: "미확인 재료 물량", reason: `${unknownVolume.toFixed(3)}㎥의 재료·밀도·실체적이 미확인입니다.` });
+  const finishes = Object.entries(q.finishTakeoff ?? {});
+  const unfinished = finishes.filter(([, item]) => item.unverified).map(([key]) => STREAM_LABEL[key]);
+  const areaAssumed = finishes.filter(([, item]) => ["area-finish-assumption", "area-supplement-assumption"].includes(item.source)).map(([key]) => STREAM_LABEL[key]);
+  if (unfinished.length) missing.push({ code: "finish-missing", item: unfinished.join("·"), reason: "분별 작업량을 확정하려면 조사 면적이나 중량이 필요합니다. 현장에 없는 것으로 확인한 품목은 0을 입력하세요." });
+  if (areaAssumed.length) missing.push({ code: "finish-assumption", item: areaAssumed.join("·"), reason: "연면적 비율로 보충한 가정 물량입니다. 조사한 면적이나 중량으로 비교를 갱신하세요." });
   const uniqueMissing = [...new Map(missing.map(item => [[item.code, item.item, item.mode ?? ""].join("|"), item])).values()];
   const assumptions = [...new Set([
     ...crush.transportResult.assumptions, ...selective.transportResult.assumptions,
