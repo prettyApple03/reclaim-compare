@@ -91,7 +91,9 @@ test("구조 전용 IFC의 마감재 추정은 공법별 공수를 만들고 물
   near(selExtra(q, params).persons, (1 - PRESS_FINISH_BASELINE.board) * q.finishAreas.board / params.int_board_m2_per_day);
   const estimate = compare(q, params);
   assert.ok(estimate.selective.total > estimate.crush.total);
-  assert.equal(estimate.crush.revenue, estimate.selective.revenue);
+  const withoutEstimate = compare({ ...q, t: raw.t }, params);
+  assert.equal(estimate.crush.revenue, withoutEstimate.crush.revenue);
+  assert.equal(estimate.selective.revenue, withoutEstimate.selective.revenue);
   assert.ok(estimate.completeness.missing.some(issue => issue.code === "finish-assumption"));
   assert.equal(estimate.recommended, null);
 

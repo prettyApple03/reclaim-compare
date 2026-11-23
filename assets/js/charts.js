@@ -6,7 +6,7 @@ export const num = (x, digits = 0) => Number(x).toLocaleString("ko-KR", { minimu
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 export const COST_PARTS = [
-  ["labor", "인건비", "var(--s1)"], ["equipment", "장비비", "var(--s2)"], ["disposal", "처리비 (운반 포함)", "var(--s3)"], ["indirect", "간접비", "var(--s4)"],
+  ["labor", "인건비", "var(--s1)"], ["equipment", "장비비", "var(--s2)"], ["disposal", "중간처리비", "var(--s3)"], ["indirect", "간접비", "var(--s4)"],
 ];
 export const REVENUE_COLOR = "var(--s6)";
 

@@ -10,17 +10,19 @@ const q = {
   concrete_m3: 360, t: { concrete: 864 }, labor: "quantity", windowMode: "both",
   windowArea: 187.56816, finishAreas: { board: 0, tile: 0 }, finishBaseline: { board: 0.6, tile: 1 },
   finishTakeoff: { board: missing, tile: missing }, finishQuantityMode: "auto",
-  selectiveLaborReference: "park-2023",
+  estimateMissingFinishLabor: true,
 };
 const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-6, `${actual} != ${expected}`);
 
-test("논현동 마감재 조사 전에는 추가 공수만 사례로 추정하고 압쇄 기준공정과 물량을 유지한다", () => {
-  const original = compare({ ...q, selectiveLaborReference: undefined }, p);
+test("일반 건축물의 누락 마감재는 분별 추가 공수만 추정하고 압쇄 공정과 반출 물량을 유지한다", () => {
+  const original = compare({ ...q, estimateMissingFinishLabor: false }, p);
   const work = selExtra(q, p);
   const result = compare(q, p);
-  assert.equal(work.referenceFallback, true);
-  near(work.commonWindow, 2 * q.windowArea * p.window_frame_pd_per_m2);
-  near(work.persons, q.area_m2 * (p.sel_extra_carpenter + p.sel_extra_laborer) - work.commonWindow);
+  near(work.gross, 2 * q.windowArea * p.window_frame_pd_per_m2);
+  near(work.finishLaborEstimate.board.area, q.area_m2 * p.int_board_ratio);
+  near(work.finishLaborEstimate.tile.persons, 0);
+  near(work.estimatedFinishPd, q.area_m2 * p.int_board_ratio * (1 - q.finishBaseline.board) / p.int_board_m2_per_day);
+  near(work.persons, work.estimatedFinishPd);
   near(result.crush.schedule.total, original.crush.schedule.total);
   near(result.crush.labor, original.crush.labor);
   near(result.selective.schedule.extension, work.persons / p.crew_size);
@@ -30,15 +32,27 @@ test("논현동 마감재 조사 전에는 추가 공수만 사례로 추정하�
   near(result.selective.revenue, original.selective.revenue);
 });
 
-test("IFC 전용·부분 조사·명시적 0·일반 공수 입력은 자료 미확인용 일괄 노무 추정을 해제한다", () => {
+test("공수 추정은 미조사 품목에만 적용하고 IFC 전용, 현장 공수 및 0 물량을 존중한다", () => {
   for (const input of [
     { ...q, finishQuantityMode: "ifc" },
     { ...q, generalFinishPd: 0 },
-    { ...q, finishTakeoff: { ...q.finishTakeoff, board: { area: 0, tons: 0, unverified: false } } },
-    { ...q, finishTakeoff: { ...q.finishTakeoff, tile: { area: 100, tons: 2, unverified: false } } },
   ]) {
-    assert.equal(selExtra(input, p).method, "quantity");
+    near(selExtra(input, p).estimatedFinishPd, 0);
   }
+  const boardZero = { ...q, finishTakeoff: { ...q.finishTakeoff, board: { area: 0, tons: 0, unverified: false } } };
+  assert.equal(selExtra(boardZero, p).finishLaborEstimate.board, undefined);
+  near(selExtra(boardZero, p).estimatedFinishPd, 0);
+  const tileSurvey = { ...q, finishAreas: { ...q.finishAreas, tile: 100 },
+    finishTakeoff: { ...q.finishTakeoff, tile: { area: 100, tons: 2, unverified: false } } };
+  assert.equal(selExtra(tileSurvey, p).finishLaborEstimate.tile, undefined);
+  near(selExtra(tileSurvey, p).estimatedFinishPd, selExtra(q, p).estimatedFinishPd);
+  const hazard = { ...q, finishAreaExclusions: { board: 500 }, finishBaseline: { board: 0.6, tile: 0.8 } };
+  near(selExtra(hazard, p).finishLaborEstimate.board.area, q.area_m2 * p.int_board_ratio - 500);
+  near(selExtra(hazard, p).finishLaborEstimate.tile.persons, q.area_m2 * p.int_tile_ratio * 0.2 / p.int_tile_m2_per_day);
+  const aboveScope = { ...q, finishLaborArea: q.area_m2 * 0.75 };
+  near(selExtra(aboveScope, p).estimatedFinishPd, selExtra(q, p).estimatedFinishPd * 0.75);
+  near(selExtra(aboveScope, p).gross, selExtra(q, p).gross);
+  assert.equal(selExtra({ ...q, labor: "paper" }, p).method, "paper");
 });
 
 test("현장 추가 공수는 0까지 인건비·공기·장비에 한 번 적용하고 장비 실견적이 가정액을 대체한다", () => {

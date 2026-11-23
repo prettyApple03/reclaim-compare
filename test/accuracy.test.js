@@ -251,24 +251,15 @@ test("별도 반출 비용 미입력과 무상 처리를 구분한다", () => {
   assert.deepEqual(free.unpricedDisposal, []);
 });
 
-test("공법별 운반 견적은 각 순비용에 한 번만 반영하고 0원과 미입력을 구분한다", () => {
+test("공법별 처리 견적은 각 순비용에 한 번만 반영하고 0원과 미입력을 구분한다", () => {
   const q = { area_m2: 100, t: { concrete: 10 } };
   const base = compare(q, p);
-  const quoted = compare({ ...q, transportCrush: 1200000, transportSel: 800000 }, p);
-  near(quoted.crush.total - base.crush.total, 1200000 - base.crush.disposalComponents.collection);
-  near(quoted.selective.total - base.selective.total, 800000 - base.selective.disposalComponents.collection);
-  near(quoted.delta - base.delta, -400000);
-  assert.equal(base.crush.transportQuote, undefined);
-  const partial = compare({ ...q, transportCrush: 1200000 }, p);
-  assert.equal(partial.crush.transportQuote, 1200000);
-  assert.equal(partial.partialTransport, true);
-  near(partial.delta - base.delta, base.crush.disposalComponents.collection - 1200000);
-  near(partial.crush.disposalComponents.collection, 1200000);
-  near(partial.selective.disposalComponents.collection, base.selective.disposalComponents.collection);
-  const free = compare({ ...q, transportCrush: 0, transportSel: 800000 }, p);
-  assert.equal(free.partialTransport, false);
-  near(free.delta, base.delta + 800000);
-  assert.equal(quoted.crush.rows.find(row => row.item === "가설 설치 비계공").price, 284440);
+  const partial = compare({ ...q, disposalQuoteCrush: 0 }, p);
+  near(partial.crush.total - base.crush.total, -base.crush.disposal);
+  near(partial.selective.total, base.selective.total);
+  assert.equal(base.crush.disposalComponents.quote, null);
+  assert.equal(partial.crush.disposalComponents.quote, 0);
+  assert.equal(partial.crush.rows.find(row => row.item === "가설 설치 비계공").price, 284440);
 });
 
 test("미회수 매립 철근만 건설폐재류 처리비에 한 번 반영한다", () => {

@@ -1,5 +1,5 @@
 // IFC 부재(종류·재료 층·부피·면적) → 폐기물 성상별 톤수. DOM·web-ifc를 쓰지 않는다.
-import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js?v=nonhyeon-compare-20261123";
+import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js?v=ifc-common-20261123";
 import { hasRebarDesignation, isPlanRebarMember, nonRebarConcrete } from "./rebar-evidence.js?v=salvage-20261123";
 
 export const CATEGORY_LABEL = {
@@ -20,7 +20,7 @@ const MATERIALS = [
   ["cementBoard", "board", /CRC\s*보드|\bCRC\b|cement[ -]?(?:fiber[ -]?)?board|시멘트\s*보드|섬유\s*시멘트/i],
   ["board", "board", /gypsum|석고|plasterboard|drywall|보드|board|텍스/i],
   ["glass", "glass", /glass|유리|glaz/i],
-  ["aluminum", "aluminum", /alumin|알루미늄|샤시|sash/i],
+  ["aluminum", "aluminum", /alumin|알루미늄/i],
   ["unsortedNonferrous", "mixed", /brass|bronze|황동|청동|구리\s*합금|copper[ -]?(?:alloy|plated|clad)|동도금|동박적층|구리\s*도금/i],
   ["copper", "copper", /copper|구리|동관|동판|순동/i],
   ["resin", "resin", /pvc|염화비닐|비닐|vinyl|plastic|플라스틱|polymer|폴리|합성수지|아크릴|acrylic|장판|linoleum|리놀륨|epoxy|에폭시|carpet|카펫|벽지|wallpaper|rubber|고무|asphalt|아스팔트|방수|습기\s*차단|방습|waterproof|membrane|bitumen/i],
@@ -34,10 +34,13 @@ const MATERIALS = [
 const STRUCTURAL = new Set(["wall", "slab", "beam", "column", "footing", "stair", "roof"]);
 const streamOf = (cls) => MATERIALS.find((m) => m[0] === cls)?.[1] || cls;
 const rebarCandidate = (el, part) => part.stream === "concrete" && !part.reinforced
+  && el.loadBearing !== false
   && (STRUCTURAL.has(el.category) || el.category === "other")
   && part.manualInput?.reinforced !== false
   && !nonRebarConcrete.test(el.name ?? "") && !nonRebarConcrete.test(part.layer ?? "");
 const framingName = /장선|서까래|joist|rafter|\bstud\b|framing/i;
+const pvcFrameName = /\bpvc\b|염화비닐|vinyl/i;
+const aluminumFrameName = /alumin|알루미늄/i;
 const applianceName = /냉장고|보일러|세척기|세탁기|쿡탑|간이\s*부엌|싱크대|변기|욕조|화장실-가정용|refrigerator|boiler|dishwasher|washing\s*machine|cooktop|kitchenette|toilet|bathtub|\bsink\b/i;
 
 export function excludedEquipment(el) {
@@ -83,14 +86,14 @@ export function classify(el, rates, overrides = {}, unknownFrame = "aluminum", o
     || (combinedFrame && el.area > 0 && !el.layers.some(layer => layer.thickness > 0));
   if (areaBased && el.category !== "door") {
     // 유리 + 창틀: 두께를 알기 어려워 면적당 무게로 계산
-    const knownFrame = el.layers.map((l) => (materialClass(l.name) || materialClass(l.category))).find((c) => c && c !== "glass");
-    const frame = combinedFrame
-      ? (/\bpvc\b|염화비닐|vinyl/i.test(combinedFrame.name) ? "resin" : "aluminum")
-      : knownFrame || unknownFrame;
+    const materialFrame = el.layers.map((l) => (materialClass(l.name) || materialClass(l.category)))
+      .find(c => ["aluminum", "resin", "wood", "metal"].includes(c));
+    const knownFrame = combinedFrame ? (pvcFrameName.test(combinedFrame.name) ? "resin" : "aluminum")
+      : materialFrame ?? (pvcFrameName.test(el.name) ? "resin" : aluminumFrameName.test(el.name) ? "aluminum" : null);
+    const frame = knownFrame ?? unknownFrame;
     guessed = !knownFrame || el.category !== "window";
     push("glass", 0, el.area * rates.perArea.window_glass);
-    push(frame, 0, el.area * rates.perArea.window_frame);
-    parts[1].windowAssembly = true;
+    push(frame, 0, el.area * rates.perArea.window_frame, { windowAssembly: true, assumedFrame: !knownFrame });
   } else if (el.category === "door") {
     const cls = el.layers.map((l) => (materialClass(l.name) || materialClass(l.category))).find(Boolean);
     if (!cls) guessed = true;
@@ -290,7 +293,7 @@ export function quantitiesFromElements(classified, area_m2) {
     const layerAreas = !frame ? classified.flatMap(el => el.parts.filter(p => p.stream === streamOf(cls) && p.area > 0 && !p.unresolved).map(p => p.area)) : [];
     if (layerAreas.length) { finishAreas[key] = layerAreas.reduce((sum, area) => sum + area, 0); continue; }
     const matching = classified.filter((el) => !el.guessed && el.area > 0
-      && (key !== "pvc" || el.layers.some((layer) => /pvc|vinyl|염화비닐/i.test(layer.name)))
+      && (key !== "pvc" || pvcFrameName.test(el.name) || el.layers.some((layer) => pvcFrameName.test(layer.name)))
       && (!frame || el.category === "window")
       && el.parts.some((p) => p.cls === cls && p.stream === streamOf(cls)));
     if (matching.length) finishAreas[key] = matching.reduce((sum, el) => sum + el.area, 0);
@@ -459,9 +462,11 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
     ? Math.min(x.tons, scale * rebarTons({ concrete_m3: x.m3, rebarConcrete_m3: x.m3, rebarKgPerM3: q.rebarKgPerM3 }, p.rebar_kg_per_m3)) : 0;
   const windowPart = (el, part) => q.windowMode && (el.category === "window" || part.windowAssembly);
   const frameRate = (key) => Math.max(0, Math.min(100, q[key + (sel ? "Sel" : "Crush")] ?? 100)) / 100;
+  const aluminumFrameRate = part => part.assumedFrame && q.alFrameUnverifiedTons > 0
+    && q.alPrice == null && q[sel ? "alSel" : "alCrush"] == null ? 0 : frameRate("al");
   const partFee = (el, part) => {
     if (q.windowMode && part.stream === "glass" && (el.category === "window" || el.parts.some(p => p.windowAssembly))) return windowMixedFee;
-    if (windowPart(el, part) && part.stream === "aluminum") return (1 - frameRate("al")) * unsoldMetalFee;
+    if (windowPart(el, part) && part.stream === "aluminum") return (1 - aluminumFrameRate(part)) * unsoldMetalFee;
     if (windowPart(el, part) && part.stream === "resin") {
       const rate = q.pvcPrice == null ? 0 : frameRate("pvc");
       return rate * cost((q.pvcPrice ?? 0) * 1000) + (1 - rate) * mixedFee;
@@ -474,7 +479,7 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
       const distinctOnly = scenario?.copperSales?.distinctOnly ?? (q.copperPipeSold != null || q.pipeInstalled != null);
       return source && (!distinctOnly || source === "separate") ? copperRate * p.price_copper : 0;
     }
-    if (windowPart(el, part) && part.stream === "aluminum") return frameRate("al") * (q.alPrice == null ? p.price_aluminum : q.alPrice * 1000);
+    if (windowPart(el, part) && part.stream === "aluminum") return aluminumFrameRate(part) * (q.alPrice == null ? p.price_aluminum : q.alPrice * 1000);
     if (windowPart(el, part) && part.stream === "resin") return q.pvcPrice == null ? 0 : frameRate("pvc") * gain(q.pvcPrice * 1000);
     return q.steelWork && isStructuralSteelPart(el, part) ? (p.rec_structural_steel ?? p.rec_scrap_sel) * p.price_scrap : price(part.stream);
   };
@@ -483,7 +488,7 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
     // 처리 방식은 실제로 적용한 작업이다. 철근 회수 효과는 아래 금액(공법별 회수율)에 반영한다.
     method: el.stream === EXCLUDED ? "제외" : sel && SEPARATED.has(el.stream) ? "분별 해체" : "압쇄 해체",
     tons: el.tons,
-    disposal: scenario?.disposalComponents?.allInQuote != null ? 0 : el.parts.reduce((s, x) => s + (x.tons - rebarOf(el, x)) * partFee(el, x)
+    disposal: scenario?.disposalComponents?.quote != null ? 0 : el.parts.reduce((s, x) => s + (x.tons - rebarOf(el, x)) * partFee(el, x)
       + (q.fixedComparison && x.stream === "metal" && el.category !== "rebar" ? x.tons * (1 - (q.steelWork && isStructuralSteelPart(el, x) ? p.rec_structural_steel ?? p.rec_scrap_sel : scrapRecovery)) * unsoldMetalFee : 0)
       + rebarOf(el, x) * (1 - scrapRecovery) * p.fee_concrete, 0),
     revenue: el.parts.reduce((s, x) => s + x.tons * partPrice(el, x) + rebarOf(el, x) * sold * price("metal"), 0),
@@ -492,12 +497,12 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
 
 export function reconcileElementResults(results, appliedTons, scenario) {
   const components = scenario.disposalComponents;
-  const quoted = components?.allInQuote != null;
+  const quoted = components?.quote != null;
   // A whole-site bid cannot be allocated to individual elements or manual frame corrections.
   const rows = quoted ? results.map(row => row.disposal ? { ...row, disposal: 0 } : row) : [...results];
   const adjustment = { globalId: "", tag: "", category: "adjustment", floor: "", stream: "", tons: 0, disposal: 0, revenue: 0 };
-  if (quoted || components?.collection > 0) {
-    rows.push({ ...adjustment, method: quoted ? "현장 처리·운반 일괄견적" : "현장 수집·운반비", disposal: Math.round(quoted ? components.allInQuote : components.collection) });
+  if (quoted) {
+    rows.push({ ...adjustment, method: "현장 중간처리 총견적", disposal: Math.round(components.quote) });
   }
   const exported = rows.reduce((sum, row) => {
     if (row.stream !== EXCLUDED) sum.weightUnits += Math.round(Number(row.tons.toFixed(4)) * 10000);

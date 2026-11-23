@@ -1,4 +1,4 @@
-import { streamTons } from "./scenario.js?v=nonhyeon-compare-20261123";
+import { streamTons } from "./scenario.js?v=ifc-common-20261123";
 
 // Itemize revenue already deducted by the scenario. The underlying cost rows keep
 // their negative sign; this ledger presents gross proceeds as positive amounts.
@@ -31,5 +31,12 @@ export function salvageLedger(q, p, result) {
     if (extraRebar > 0) pendingRebar = { volume_m3: q.unverifiedRebarConcrete_m3, installed_t: extraRebar,
       sale_t: recoverableTons, price_won_per_t: p.price_scrap, gross_won: recoverableTons * p.price_scrap };
   }
-  return { total_won: result.revenue, items, pending_rebar: pendingRebar };
+  const pendingSales = [];
+  if (q.pvcFrameTons > 0 && q.pvcPrice == null) {
+    pendingSales.push({ item: "PVC 창틀", weight_t: q.pvcFrameTons, reason: "인수 단가 및 조건 미확인" });
+  }
+  if (q.alFrameUnverifiedTons > 0 && q.alPrice == null && q[result.mode === "selective" ? "alSel" : "alCrush"] == null) {
+    pendingSales.push({ item: "재질 미확인 창틀", weight_t: q.alFrameUnverifiedTons, reason: "재질 및 매각 회수율 미확인" });
+  }
+  return { total_won: result.revenue, items, pending_rebar: pendingRebar, pending_sales: pendingSales };
 }

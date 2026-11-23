@@ -195,11 +195,27 @@ export async function parseIfc(buffer) {
     const scale = lengthScale(units);
     const projectMass = units.find(u => enumOf(u.UnitType) === "MASSUNIT");
     const projectVolume = volumeUnitM3(units.find(u => enumOf(u.UnitType) === "VOLUMEUNIT"));
-    const weights = new Map(), volumes = new Map();
+    const weights = new Map(), volumes = new Map(), loadBearing = new Map();
     for (const rid of ids(W.IFCRELDEFINESBYPROPERTIES)) {
       const relation = api.GetLine(model, rid);
       const id = relation.RelatingPropertyDefinition?.value;
-      if (!id || api.GetLineType(model, id) !== W.IFCELEMENTQUANTITY) continue;
+      if (!id) continue;
+      const propertyType = api.GetLineType(model, id);
+      if (propertyType === W.IFCPROPERTYSET) {
+        const set = api.GetLine(model, id);
+        if (!/^Pset_(?:Wall|Slab|Beam|Column|Footing|Roof|Stair)Common$/i.test(set.Name?.value ?? "")) continue;
+        for (const ref of set.HasProperties || []) {
+          const prop = api.GetLine(model, ref.value);
+          if (prop.Name?.value !== "LoadBearing") continue;
+          const value = enumOf(prop.NominalValue);
+          if (!["T", "F", "TRUE", "FALSE"].includes(value)) continue;
+          for (const object of relation.RelatedObjects || []) {
+            loadBearing.set(object.value, value === "T" || value === "TRUE");
+          }
+        }
+        continue;
+      }
+      if (propertyType !== W.IFCELEMENTQUANTITY) continue;
       for (const ref of api.GetLine(model, id).Quantities || []) {
         if (api.GetLineType(model, ref.value) === W.IFCQUANTITYVOLUME) {
           const quantity = api.GetLine(model, ref.value, true);
@@ -341,6 +357,7 @@ export async function parseIfc(buffer) {
         weightTons: weights.get(id)?.tons,
         hasNetWeight: (weights.get(id)?.priority ?? -1) >= 2,
         hasNetVolume: volumes.get(id)?.priority === 2,
+        loadBearing: loadBearing.get(id) ?? loadBearing.get(parentOf.get(id)),
         area: openingArea(w, h, a.surface), floorFootprint: a.floorFootprint > 0 ? a.floorFootprint : undefined,
         layers: matOf.get(id) || matOf.get(typeOf.get(id)) || [],
       };
