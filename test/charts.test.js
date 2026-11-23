@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stackedBars } from "../assets/js/charts.js";
+import { formatCostDifference, stackedBars } from "../assets/js/charts.js";
+
+test("비용 차이의 억·만원·원 경계와 부호를 표시한다", () => {
+  assert.deepEqual(
+    [0, 9_999, 10_000, 12_345, 99_999_999, 100_000_000, 123_450_000]
+      .map(value => formatCostDifference(value)),
+    ["0원", "9,999원", "1만원", "1만원", "9,999만원", "1억 0만원", "1억 2,345만원"],
+  );
+  assert.equal(formatCostDifference(-123_456_789, true), "−1억 2,345만원");
+  assert.equal(formatCostDifference(54_321, true), "+5만원");
+  assert.equal(formatCostDifference(-0.5, true), "0원");
+});
 
 test("가까운 순비용을 막대에서 각각 원 단위로 읽을 수 있다", () => {
   const chart = stackedBars([

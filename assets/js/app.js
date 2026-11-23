@@ -3,9 +3,9 @@ import { selectiveEquipmentHoursPerDay, costScenario, concreteCut, officeSalvage
 import { VALIDATION_SCHEMA, MIN_CASES, SCOPES, PERIOD_UNITS, BENCHMARKS, validationCases, comparableCases, calibrateStructure, benchmark } from "./calibration.js?v=equipment-compare-20261123";
 import { variables, tornado, breakEven, simulate, histogram } from "./sensitivity.js?v=equipment-compare-20261123";
 import { classify, quantitiesFromElements, connectFinishTakeoff, supplement, checkAgainstUnits, elementResults, isStructuralSteelPart, reconcileElementResults, toCsv, groupKey, CATEGORY_LABEL, isOpenSteelFrame } from "./classify.js?v=scope-report-20261123";
-import { COST_PARTS, REVENUE_COLOR, stackedBars, tornadoChart, histChart, legend, mil, num } from "./charts.js?v=equipment-compare-20261123";
+import { COST_PARTS, REVENUE_COLOR, stackedBars, tornadoChart, histChart, legend, mil, num, formatCostDifference } from "./charts.js?v=cost-units-20261123";
 import { ifcScopeElements } from "./ifc.js?v=scope-report-20261123";
-import { reportHtml, kstStamp, fitSchedules } from "./report.js?v=scope-report-20261123";
+import { reportHtml, kstStamp, fitSchedules } from "./report.js?v=cost-units-20261123";
 import { concreteCutCandidates } from "./concrete-cut.js?v=equipment-compare-20261123";
 import { concreteCutControls, concreteCutInput, cutProjectFields } from "./cut-controls.js?v=concrete-cut-20261123";
 
@@ -785,7 +785,7 @@ function openSteelNotice(d) {
       ${numeric("openSteelSelectiveDays", "분별해체 작업일수 (선택)")}
     </div>
     ${state.formError ? `<p class="badge badge-danger">${esc(state.formError)}</p>` : ""}
-    ${ready ? `<p class="verdict">${delta === 0 ? "두 해체안의 순견적이 같습니다." : (delta < 0 ? "분별해체" : "일반해체") + " 순견적이 " + num(Math.abs(delta)) + "원 낮습니다."}</p>
+    ${ready ? `<p class="verdict">${Math.trunc(delta) === 0 ? "두 해체안의 순견적이 같습니다." : (delta < 0 ? "분별해체" : "일반해체") + " 순견적이 " + formatCostDifference(Math.abs(delta)) + " 낮습니다."}</p>
       <div class="table-wrap"><table class="tbl"><thead><tr><th>항목</th><th class="r">일반해체</th><th class="r">분별해체</th></tr></thead><tbody>
       <tr><td>순견적</td><td class="r">${num(crush)}원</td><td class="r">${num(selective)}원</td></tr>
       <tr><td>예정 작업일수</td><td class="r">${crushDays == null ? "미입력" : num(crushDays, 1) + "일"}</td><td class="r">${selectiveDays == null ? "미입력" : num(selectiveDays, 1) + "일"}</td></tr>
@@ -1027,12 +1027,11 @@ function compareTab(d) {
   sim ||= simulate(q, p, vars, { n: 5000, seed: state.seed });
   const better = delta < 0 ? "전면 분별해체" : "일괄 압쇄";
   const issues = [...new Set([...crush.issues, ...selective.issues])];
-  const equality = delta === 0;
+  const equality = Math.trunc(delta) === 0;
   const { hasUnpricedDisposal } = cmp;
   const steel = steelDismantling(q);
   const boardBreakEven = breakEvenBoardShare(q,p);
   const equipmentDelta = selective.equipment - crush.equipment;
-  const signedAmount = value => `${Math.round(value) > 0 ? "+" : ""}${num(Math.round(value) || 0)}`;
   const equipmentRate = crush.equipment > 0 && Math.round(equipmentDelta) !== 0
     ? ` (${equipmentDelta > 0 ? "+" : ""}${num(equipmentDelta / crush.equipment * 100, 2)}%)` : "";
   const totalDigits = mil(crush.total) === mil(selective.total) && Math.round(delta) !== 0 ? 2 : 1;
@@ -1079,14 +1078,14 @@ function compareTab(d) {
     const a = find(crush, k), b = find(selective, k), r = a || b;
     if (r.group !== last) { detail += `<tr class="grp"><td colspan="7">${r.group}</td></tr>`; last = r.group; }
     const cell = (x) => x ? `<td class="r">${num(x.qty, x.item.endsWith("추정)") ? 1 : x.qty < 100 ? 1 : 0)} ${x.unit}</td><td class="r">${mil(x.amount, 2)}</td>` : `<td class="r">–</td><td class="r">–</td>`;
-    detail += `<tr><td>${esc(r.item)}</td><td class="r">${a && b && a.price !== b.price ? `${num(a.price)} / ${num(b.price)}` : num(r.price)}</td>${cell(a)}${cell(b)}<td class="r">${mil((b?.amount || 0) - (a?.amount || 0), 2)}</td></tr>`;
+    detail += `<tr><td>${esc(r.item)}</td><td class="r">${a && b && a.price !== b.price ? `${num(a.price)} / ${num(b.price)}` : num(r.price)}</td>${cell(a)}${cell(b)}<td class="r">${formatCostDifference((b?.amount ?? 0) - (a?.amount ?? 0), true)}</td></tr>`;
   }
 
   return `<section class="card">
       ${state.source === "ifc" ? `<p>${esc(state.fileName)} · 산정 면적 ${num(q.area_m2,2)}㎡ · ${num(q.floors)}층 · 집계 ${num(d.classified.length)}개 부재</p><p class="caption muted">범위 ${q.scope === "above" ? "식별된 지하·기초 제외" : "입력 모델 전체"} · 원단위 ${esc(state.usage)}${state.supplement ? " 적용" : " 보충 꺼짐"} · 용도·현장 조건 미확인 시 기본 가정을 사용합니다. <button class="btn" data-tab="model">입력 근거 확인</button></p>` : ""}
       ${planExampleNotice()}
       ${q.windowMode === "both" ? `<p class="caption muted">${WINDOW_ASSUMPTION}</p>` : ""}
-      <p class="verdict">${d.review.length ? "포함 항목 기준 · " : ""}${equality ? "두 공법의 순비용이 같습니다." : `<strong>${better}</strong>의 순비용이 ${num(Math.abs(delta))}원 낮습니다.`}</p>
+      <p class="verdict">${d.review.length ? "포함 항목 기준 · " : ""}${equality ? "두 공법의 순비용이 같습니다." : `<strong>${better}</strong>의 순비용이 ${formatCostDifference(Math.abs(delta))} 낮습니다.`}</p>
       <p class="caption muted">해체 범위 ${esc(d.comparisonScope)} · 공기 기준 압쇄 ${scheduleBasisLabel(crush.schedule)} / 분별 ${scheduleBasisLabel(selective.schedule)}</p>
       ${q.cutPlanningStatus ? `<div class="row"><span>콘크리트 절단·인양 · ${esc(q.cutPlanningStatus)}${d.cutCandidates.length ? ` · IFC 검토 후보 ${num(d.cutCandidates.length)}개` : ""}</span><button class="btn btn-outline" data-act="cut-settings">절단 후보·견적 입력</button></div>` : ""}
       ${d.review.length ? `<details><summary>전체 공법 판단에 필요한 확인 항목 (${d.review.length}건)</summary><ul>${d.review.map(note => "<li>" + esc(note) + "</li>").join("")}</ul><button class="btn" data-act="scope-settings">모델·현장 조건 열기</button></details>` : ""}
@@ -1111,19 +1110,19 @@ function compareTab(d) {
     <section class="kpis">
       <div class="card kpi"><div class="v">${mil(crush.total, totalDigits)}</div><div class="l">일괄 압쇄 순비용 (백만원)${steel.excluded ? " · 철골비 별도" : ""}</div><div class="s">공기 ${num(crush.days, 1)}일</div></div>
       <div class="card kpi"><div class="v">${mil(selective.total, totalDigits)}</div><div class="l">전면 분별해체 순비용 (백만원)${steel.excluded ? " · 철골비 별도" : ""}</div><div class="s">공기 ${num(selective.days, 1)}일 (${cmp.deltaDays >= 0 ? "+" : ""}${num(cmp.deltaDays, 1)}일)</div></div>
-      <div class="card kpi"><div class="v">${signedAmount(delta)}</div><div class="l">순비용 차이 (분별 − 압쇄, 원)</div><div class="s">${d.basis ? esc(d.basis) + " · " : ""}음수면 분별이 유리</div></div>
+      <div class="card kpi"><div class="v" title="${num(delta)}원">${formatCostDifference(delta, true)}</div><div class="l">순비용 차이 (분별 − 압쇄)</div><div class="s">${d.basis ? esc(d.basis) + " · " : ""}음수면 분별이 유리</div></div>
       <div class="card kpi"><div class="v">${num(sim.pSelective * 100, 1)}%</div><div class="l">설정 범위에서 분별 순비용이 낮은 시행 비율</div><div class="s">${num(sim.n)}회 · ${simulationScope}</div></div>
     </section>
     <section class="card"><h2>비용 구성</h2>
-      <p><strong>장비비</strong> · 압쇄 ${num(crush.equipment)}원 / 분별 ${num(selective.equipment)}원 · <strong>차이 ${signedAmount(equipmentDelta)}원${equipmentRate}</strong></p>
+      <p><strong>장비비</strong> · 압쇄 ${num(crush.equipment)}원 / 분별 ${num(selective.equipment)}원 · <strong title="${num(equipmentDelta)}원">차이 ${formatCostDifference(equipmentDelta, true)}${equipmentRate}</strong></p>
       ${[["압쇄", crush], ["분별", selective]].filter(([, result]) => result.cut.area > 0).map(([label, result]) => {
         const cut = result.cut;
         return `<p class="caption muted">${label} 절단 ${num(cut.area, 3)}㎡ · ${num(cut.cost)}원${cut.quoteMissing ? " 반영 · 미확정 항목 있음" : cut.costBasis === "reference" ? " · 참고단가 포함" : " · 도급·인양 견적"}${cut.avoidedHoursApplied > 0 ? ` · 굴착기 ${num(cut.avoidedHoursApplied, 1)}시간 차감` : ""}</p>`;
       }).join("")}
       <p class="caption muted">분별 보조 장비 · ${selectiveEquipmentBasis(q, p, selective.schedule.selective)}</p>
       ${extraEquipmentAllowance(q, cmp)}
-      <p>공기 ${num(crush.days, 1)}일 → ${num(selective.days, 1)}일 · 간접비 차이 ${mil(selective.indirect - crush.indirect, 2)}백만원</p>
-      <p>분별 추가 매각수익 ${mil(selective.revenue-crush.revenue,2)}백만원 · 처리비 절감 ${mil(crush.disposal-selective.disposal,2)}백만원 · 추가 인건비 ${mil(selective.labor-crush.labor,2)}백만원</p>${stackedBars([{ ...crush, name: "일괄 압쇄" }, { ...selective, name: "전면 분별" }])}</section>
+      <p>공기 ${num(crush.days, 1)}일 → ${num(selective.days, 1)}일 · 간접비 차이 ${formatCostDifference(selective.indirect - crush.indirect)}</p>
+      <p>분별 추가 매각수익 ${formatCostDifference(selective.revenue - crush.revenue)} · 처리비 절감 ${formatCostDifference(crush.disposal - selective.disposal)} · 추가 인건비 ${formatCostDifference(selective.labor - crush.labor)}</p>${stackedBars([{ ...crush, name: "일괄 압쇄" }, { ...selective, name: "전면 분별" }])}</section>
     ${comparisonThresholds(q, p, cmp, work)}
     ${officeSalvageCard(q, p, delta)}
     <section class="card"><h2>혼합잔재 처리비</h2>
@@ -1131,7 +1130,7 @@ function compareTab(d) {
       <div class="table-wrap"><table class="tbl"><thead><tr><th>공법</th><th class="r">잔재량</th><th class="r">가연물 비율</th><th class="r">단가</th><th>적용 근거</th></tr></thead><tbody>
       ${[["압쇄", crush.mixed], ["분별", selective.mixed]].map(([label, mix]) => `<tr><td>${label}</td><td class="r">${num(mix.tons, 2)}t</td><td class="r">${num(mix.share * 100, 1)}%</td><td class="r">${mix.tons > 0 ? num(mix.fee) + "원/t" : "–"}</td><td>${esc(mix.rule)}${mix.needsQuote ? " · 비교용 단가" : ""}</td></tr>`).join("")}
       </tbody></table></div>
-      <p class="caption muted">분별 절감액 ${mil(crush.mixed.tons * crush.mixed.fee - selective.mixed.tons * selective.mixed.fee, 2)}백만원 · 물량 효과 ${mil((crush.mixed.tons - selective.mixed.tons) * crush.mixed.fee, 2)}백만원 · 단가 효과 ${mil(selective.mixed.tons * (crush.mixed.fee - selective.mixed.fee), 2)}백만원</p>
+      <p class="caption muted">분별 절감액 ${formatCostDifference(crush.mixed.tons * crush.mixed.fee - selective.mixed.tons * selective.mixed.fee)} · 물량 효과 ${formatCostDifference((crush.mixed.tons - selective.mixed.tons) * crush.mixed.fee)} · 단가 효과 ${formatCostDifference(selective.mixed.tons * (crush.mixed.fee - selective.mixed.fee))}</p>
     </section>
     <section class="card"><h2>산정 기준</h2>
       <details><summary>폐콘크리트 성상 가정을 바꾸면?</summary>
@@ -1139,7 +1138,7 @@ function compareTab(d) {
         <ul>${["same", "standard", "good"].map(key => {
           const alternative = compare({ ...q, concreteCase: key }, p);
           const shares = CONCRETE_CASES[key].shares.map(value => num(value * 100)).join(" / ");
-          return `<li>${esc(CONCRETE_CASES[key].label)} · 분별 ${shares}%${key === q.concreteCase ? " (현재 적용)" : ""} · 비용 차이 ${mil(alternative.delta, 2)}백만원</li>`;
+          return `<li>${esc(CONCRETE_CASES[key].label)} · 분별 ${shares}%${key === q.concreteCase ? " (현재 적용)" : ""} · 비용 차이 ${formatCostDifference(alternative.delta, true)}</li>`;
         }).join("")}</ul>
       </details>
       <div class="table-wrap"><table class="tbl"><thead><tr><th>항목</th><th>적용 기준</th></tr></thead><tbody>
@@ -1156,7 +1155,7 @@ function compareTab(d) {
       ${cutBreakEven ? `<p>${cutBreakEven}</p>` : ""}
       ${delta > 0 && !unpricedCuts.length ? `<p>현재 물량과 공기를 유지하면 분별안에서 추가 순수익 또는 비용 절감 ${num(delta)}원이 더 발생할 때 두 공법의 순비용이 같아집니다.</p>` : ""}
       <div class="table-wrap"><table class="tbl"><thead><tr><th>항목</th><th class="r">단가 (원, 다르면 압쇄 / 분별)</th><th class="r">압쇄 수량</th><th class="r">압쇄 (백만원)</th><th class="r">분별 수량</th><th class="r">분별 (백만원)</th><th class="r">차이</th></tr></thead>
-      <tbody>${detail}</tbody><tfoot><tr><td>순비용 (비용 − 매각수익)</td><td></td><td></td><td class="r">${mil(crush.total, 2)}</td><td></td><td class="r">${mil(selective.total, 2)}</td><td class="r">${mil(delta, 2)}</td></tr></tfoot></table></div>
+      <tbody>${detail}</tbody><tfoot><tr><td>순비용 (비용 − 매각수익)</td><td></td><td></td><td class="r">${mil(crush.total, 2)}</td><td></td><td class="r">${mil(selective.total, 2)}</td><td class="r">${formatCostDifference(delta, true)}</td></tr></tfoot></table></div>
       <ul class="caption muted">${[["압쇄", crush], ["분별", selective]].map(([label, { mixed, unsoldMetal, embeddedRebar, concreteIntake }]) =>
         `<li>${label} 혼합잔재 ${num(mixed.tons, 2)}t · 확인된 가연물 ${num(mixed.share * 100, 1)}% · 주성상 ${mixLabel[mixed.main]} · ${esc(mixed.rule)} ${num(mixed.fee)}원/t${mixed.needsQuote ? " (프로젝트 기본값)" : ""} · 폐콘크리트 반입 ${num(concreteIntake, 2)}t (미회수 철근 ${num(embeddedRebar, 2)}t 포함) · 기타 미매각 금속 ${num(unsoldMetal, 2)}t</li>`).join("")}</ul>
       <details style="margin-top:8px"><summary>일당 간접비 ${num(p.indirect_per_day)}원 · 가정 (탐색 범위 ${num(indirect.min)}~${num(indirect.max)}원)</summary><p class="caption muted">${esc(indirect.ref)} 간접비는 각 공법의 작업일에 곱합니다.</p></details>
@@ -1179,17 +1178,17 @@ function compareTab(d) {
       ${crush.schedule.cutting || selective.schedule.cutting ? `<p class="caption muted">기본 공정에 추가 반영한 절단·인양 일수 · 압쇄 ${num(crush.cut.daysApplied, 1)}일 / 분별 ${num(selective.cut.daysApplied, 1)}일. 도급 인력은 견적에 포함됩니다.</p>` : ""}
       <p class="caption muted">배치 인원은 천마산 p.38, 정선 p.65, 노량진 p.104의 계획을 참고했습니다. 구조체 기간에만 굴착기 연동 인원을 배치하고 관리자를 직접노무에서 제외하는 것은 팀 가정입니다. 천마산은 살수와 작업유도를 각각 전체 21일로 계획했습니다. 모델의 현장 조건에서 전체 작업일 배치도 비교할 수 있습니다.</p>
       <p class="caption muted" style="margin-top:8px">장비 방식은 ${EQUIPMENT[equipmentMode(q)]}입니다. 분별 추가 작업 ${num(selective.schedule.selective,1)}일과 병행률 ${num(q.overlap * 100,1)}%를 적용한 연장 추정은 ${num(selective.schedule.extension,1)}일입니다. 반영된 총 공기 차이는 ${num(cmp.deltaDays,1)}일입니다. IFC 창틀·유리 선철거 공수는 두 공법의 내부 철거에 포함됩니다.</p>
-      ${paperAlt ? `<p class="caption muted">표 3·4 기재를 달리 해석해 보통인부 추가 품을 0.325로 두면, Δ는 ${mil(paperAlt.delta, 2)}백만원, 공기 차이는 ${num(paperAlt.deltaDays, 1)}일입니다. 이 해석의 출처 확인이 필요합니다.</p>` : ""}
+      ${paperAlt ? `<p class="caption muted">표 3·4 기재를 달리 해석해 보통인부 추가 품을 0.325로 두면, Δ는 ${formatCostDifference(paperAlt.delta, true)}, 공기 차이는 ${num(paperAlt.deltaDays, 1)}일입니다. 이 해석의 출처 확인이 필요합니다.</p>` : ""}
     </section>
     <div class="grid-2">
       <section class="card"><h2>손익분기</h2>${be ? `<ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:8px">${be}</ul>` : `<p class="muted">범위 안에서 결과를 뒤집는 변수가 없습니다.</p>`}
         <p class="caption muted" style="margin-top:12px">폐합성수지 순단가 손익분기 ${resinSwitch == null ? "탐색 구간 내 없음" : `${num(resinSwitch)}원/t`} (다른 입력 고정, −100만~500만원/t 탐색).<br>다른 값은 그대로 두고 한 변수만 바꿨을 때 두 안의 비용이 같아지는 지점입니다. 조사 범위 안에서 결과를 뒤집을 수 있는 변수만 보여줍니다.</p>
         <details style="margin-top:8px"><summary>폐목재·수지 사례별 Δ</summary>
           <p class="caption muted">배출원과 비용 포함 범위가 다른 공고 사례입니다.</p>
-          <ul>${alternatePrices.map(([label, changes]) => `<li>${label} · ${num(Object.values(changes)[0])}원/t → Δ ${mil(compare(q, { ...p, ...changes }).delta, 2)}백만원</li>`).join("")}</ul>
+          <ul>${alternatePrices.map(([label, changes]) => `<li>${label} · ${num(Object.values(changes)[0])}원/t → Δ ${formatCostDifference(compare(q, { ...p, ...changes }).delta, true)}</li>`).join("")}</ul>
         </details></section>
       <section class="card"><h2>몬테카를로 결과</h2>${histChart(histogram(sim.sorted))}
-        <div class="row" style="margin-top:12px;justify-content:space-between"><span class="num">P10 ${mil(sim.p10)} · P50 ${mil(sim.p50)} · P90 ${mil(sim.p90)} 백만원</span>
+        <div class="row" style="margin-top:12px;justify-content:space-between"><span class="num">P10 ${formatCostDifference(sim.p10)} · P50 ${formatCostDifference(sim.p50)} · P90 ${formatCostDifference(sim.p90)}</span>
         <label class="row no-print caption muted">seed <input class="input sm" style="width:80px" type="number" min="1" data-set="seed" value="${state.seed}"></label></div>
         <p class="caption muted" style="margin-top:8px">범위가 있는 단가 ${vars.length}개를 삼각분포로 뽑아 Δ를 ${num(sim.n)}번 계산했습니다. seed가 같으면 결과가 같습니다.</p></section>
     </div>

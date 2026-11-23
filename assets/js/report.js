@@ -1,9 +1,10 @@
 // 보고서 인쇄 · PDF: Revit의 RC-01, RC-02, RC-03 시트와 같은 구성을 A1 종이로 만든다.
 // DOM을 쓰지 않는 순수 함수만 둔다 (HTML 문자열을 만든다).
 
+import { formatCostDifference } from "./charts.js?v=cost-units-20261123";
+
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const won = (n) => `${Math.round(Number(n) || 0).toLocaleString("ko-KR")}원`;
-const signedWon = (n) => `${n > 0 ? "+" : ""}${won(n)}`;
 const tons = (n) => (Number(n) || 0).toFixed(3);
 
 export const SHEET = {
@@ -77,7 +78,7 @@ function rc01(ctx) {
   const rows = [
     ["일괄 압쇄", won(s.crush_total_won), true],
     ["전면 분별", won(s.selective_total_won), true],
-    ["차액 (분별 − 압쇄)", signedWon(s.delta_won), true],
+    ["차액 (분별 − 압쇄)", formatCostDifference(s.delta_won, true), true],
     ["설정 범위에서 분별 순비용이 낮은 시행 비율", s.p_selective_cheaper == null ? "미산정" : `${(Number(s.p_selective_cheaper) * 100).toFixed(1)}%`, false],
     ...(conditional && result ? [["포함 비용 비교", result === "동일" ? result : result + " 낮음", false]] : []),
     ["공법 권장", (conditional ? null : methodLabel[s.recommended]) ?? "판정 보류", false],

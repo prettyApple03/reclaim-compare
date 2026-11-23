@@ -3,6 +3,16 @@
 
 export const mil = (won, digits = 1) => (won / 1e6).toLocaleString("ko-KR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 export const num = (x, digits = 0) => Number(x).toLocaleString("ko-KR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+export function formatCostDifference(won, signed = false) {
+  const amount = Math.trunc(Math.abs(won));
+  if (!Number.isFinite(amount)) return "–";
+  const sign = amount === 0 ? "" : won < 0 ? "−" : signed ? "+" : "";
+  if (amount >= 100_000_000) {
+    return `${sign}${num(Math.floor(amount / 100_000_000))}억 ${num(Math.floor((amount % 100_000_000) / 10_000))}만원`;
+  }
+  if (amount >= 10_000) return `${sign}${num(Math.floor(amount / 10_000))}만원`;
+  return `${sign}${num(amount)}원`;
+}
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 export const COST_PARTS = [
@@ -57,7 +67,7 @@ export function tornadoChart(items, base) {
     const y = top + i * (rowH + gap);
     const bar = (v, color, which, at) => {
       const a = Math.min(X(base), X(v)), w = Math.abs(X(v) - X(base));
-      return `<rect x="${a}" y="${y}" width="${Math.max(w, 1)}" height="${rowH}" rx="3" fill="${color}" data-tip="${esc(`${d.label} ${which} ${num(at, at < 10 ? 2 : 0)} ${d.unit} → Δ ${mil(v)}백만원`)}"/>`;
+      return `<rect x="${a}" y="${y}" width="${Math.max(w, 1)}" height="${rowH}" rx="3" fill="${color}" data-tip="${esc(`${d.label} ${which} ${num(at, at < 10 ? 2 : 0)} ${d.unit} → Δ ${formatCostDifference(v, true)}`)}"/>`;
     };
     out += bar(d.lo, "var(--s1)", "최소", d.min) + bar(d.hi, "var(--s2)", "최대", d.max);
     out += `<text x="${L - 10}" y="${y + rowH / 2 + 4}" text-anchor="end" class="c-label">${esc(d.label)}</text>`;
@@ -67,7 +77,7 @@ export function tornadoChart(items, base) {
   out += `<line x1="${X(base)}" x2="${X(base)}" y1="${top - 6}" y2="${H}" class="c-axis"/>`;
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="민감도 토네이도 차트">${out}</svg>`
     + legend([["변수 최소값일 때", "var(--s1)"], ["변수 최대값일 때", "var(--s2)"]])
-    + `<p class="caption muted">0의 왼쪽이면 분별해체가 유리하다. 가는 선은 기본 단가일 때의 Δ(${mil(base)}백만원).</p>`;
+    + `<p class="caption muted">0의 왼쪽이면 분별해체가 유리하다. 가는 선은 기본 단가일 때의 Δ(${formatCostDifference(base, true)}).</p>`;
 }
 
 // 몬테카를로 Δ 분포
@@ -79,11 +89,11 @@ export function histChart(bins) {
   let out = "";
   for (const b of bins) {
     const h = (b.count / max) * (base - top), mid = (b.x0 + b.x1) / 2;
-    out += `<rect x="${X(b.x0) + 1}" y="${base - h}" width="${Math.max(1, X(b.x1) - X(b.x0) - 2)}" height="${h}" rx="2" fill="${mid < 0 ? "var(--s1)" : "var(--s2)"}" data-tip="${esc(`Δ ${mil(b.x0)} ~ ${mil(b.x1)}백만원: ${num((b.count / n) * 100, 1)}%`)}"/>`;
+    out += `<rect x="${X(b.x0) + 1}" y="${base - h}" width="${Math.max(1, X(b.x1) - X(b.x0) - 2)}" height="${h}" rx="2" fill="${mid < 0 ? "var(--s1)" : "var(--s2)"}" data-tip="${esc(`Δ ${formatCostDifference(b.x0)} ~ ${formatCostDifference(b.x1)}: ${num((b.count / n) * 100, 1)}%`)}"/>`;
   }
   out += `<line x1="${L}" x2="${W - R}" y1="${base}" y2="${base}" class="c-axis"/>`;
-  for (const v of [lo, hi]) out += `<text x="${X(v)}" y="${base + 18}" text-anchor="${v === lo ? "start" : "end"}" class="c-note">${mil(v)}백만원</text>`;
-  if (lo < 0 && hi > 0) out += `<line x1="${X(0)}" x2="${X(0)}" y1="${top}" y2="${base}" class="c-zero"/><text x="${X(0)}" y="${base + 18}" text-anchor="middle" class="c-note">0</text>`;
+  for (const v of [lo, hi]) out += `<text x="${X(v)}" y="${base + 18}" text-anchor="${v === lo ? "start" : "end"}" class="c-note">${formatCostDifference(v)}</text>`;
+  if (lo < 0 && hi > 0) out += `<line x1="${X(0)}" x2="${X(0)}" y1="${top}" y2="${base}" class="c-zero"/><text x="${X(0)}" y="${base + 18}" text-anchor="middle" class="c-note">0원</text>`;
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Δ 확률 분포">${out}</svg>`
     + legend([["분별해체가 유리 (Δ < 0)", "var(--s1)"], ["일괄 압쇄가 유리 (Δ ≥ 0)", "var(--s2)"]]);
 }
