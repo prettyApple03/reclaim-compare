@@ -6,7 +6,7 @@ export const num = (x, digits = 0) => Number(x).toLocaleString("ko-KR", { minimu
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 export const COST_PARTS = [
-  ["labor", "인건비", "var(--s1)"], ["equipment", "장비비", "var(--s2)"], ["disposal", "중간처리비", "var(--s3)"], ["indirect", "간접비", "var(--s4)"],
+  ["labor", "인건비", "var(--s1)"], ["equipment", "장비비", "var(--s2)"], ["disposal", "처리비", "var(--s3)"], ["transport", "운반비", "var(--s5)"], ["indirect", "간접비", "var(--s4)"],
 ];
 export const REVENUE_COLOR = "var(--s6)";
 
@@ -17,7 +17,7 @@ export function stackedBars(scenarios) {
   const W = 760, L = 96, R = 150, rowH = 44, gap = 22, top = 8;
   const maxCost = Math.max(...scenarios.map((s) => COST_PARTS.reduce((sum, [key]) => sum + (s[key] ?? 0), 0)));
   const maxRev = Math.max(...scenarios.map((s) => s.revenue));
-  const k = (W - L - R) / (maxCost + maxRev || 1), x0 = L + maxRev * k;
+  const k = (W - L - R) / (maxCost + maxRev), x0 = L + maxRev * k;
   const H = top + scenarios.length * (rowH + gap);
   let out = "";
   scenarios.forEach((s, i) => {

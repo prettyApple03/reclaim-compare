@@ -1,5 +1,5 @@
 // 손익분기, 토네이도(민감도), 몬테카를로. Δ = 분별 총비용 − 압쇄 총비용 (음수면 분별이 유리)
-import { compare } from "./scenario.js?v=ifc-common-20261123";
+import { compare } from "./scenario.js?v=ifc-equipment-days-1";
 
 export const delta = (q, p) => compare(q, p).delta;
 
@@ -17,13 +17,12 @@ export function tornado(q, p, vars) {
 
 // 변수 하나만 바꿔 Δ = 0이 되는 값. [lo, hi] 안에서 부호가 바뀌지 않으면 null
 export function breakEven(q, p, key, lo, hi) {
-  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return null;
   const f = (x) => delta(q, { ...p, [key]: x });
   let a = lo, b = hi, fa = f(a);
+  if (fa === 0) return a;
   const fb = f(b);
-  // A flat tie is not a break-even threshold. Require a meaningful strict sign
-  // change inside the explored interval, rather than reporting every lower bound.
-  if (!Number.isFinite(fa) || !Number.isFinite(fb) || Math.abs(fa) < 1 || Math.abs(fb) < 1 || fa * fb >= 0) return null;
+  if (fb === 0) return b;
+  if (fa * fb > 0) return null;
   for (let i = 0; i < 60; i++) {
     const m = (a + b) / 2, fm = f(m);
     if (fa * fm <= 0) b = m; else { a = m; fa = fm; }
@@ -50,8 +49,6 @@ export function triangular(u, a, c, b) {
 }
 
 export function simulate(q, p, vars, { n = 5000, seed = 1 } = {}) {
-  if (!Number.isInteger(n) || n < 1) throw new Error("시행 횟수는 1 이상의 정수여야 합니다.");
-  const basis = compare(q, p);
   const rnd = mulberry32(seed);
   const deltas = new Float64Array(n);
   for (let i = 0; i < n; i++) {
@@ -63,16 +60,7 @@ export function simulate(q, p, vars, { n = 5000, seed = 1 } = {}) {
   const pct = (x) => sorted[Math.min(n - 1, Math.floor(x * n))];
   let wins = 0, sum = 0;
   for (const d of deltas) { if (d < 0) wins++; sum += d; }
-  return { n, seed, pSelective: wins / n, mean: sum / n, p10: pct(0.1), p50: pct(0.5), p90: pct(0.9), min: sorted[0], max: sorted[n - 1], sorted,
-    interpretation: "conditional-included-costs", distribution: "independent-triangular", variableCount: vars.length,
-    completeBasis: basis.completeness.complete,
-    missingBasis: basis.completeness.missing,
-    limitations: [
-      "설정한 변수 범위 안의 포함 항목 비교이며 실제 현장 경제성의 확률이 아닙니다.",
-      "변수는 독립 삼각분포로 샘플링합니다. 가격·생산성·작업조·회수율 사이의 상관은 실증자료가 없어 반영하지 않았습니다.",
-      "물량 분류오류, 미확인 재료, 공법 적합성, 누락 견적, 고정 성상 시나리오는 이 시행 비율에 포함되지 않습니다.",
-    ],
-  };
+  return { n, seed, pSelective: wins / n, mean: sum / n, p10: pct(0.1), p50: pct(0.5), p90: pct(0.9), min: sorted[0], max: sorted[n - 1], sorted };
 }
 
 export function histogram(sorted, bins = 30) {
