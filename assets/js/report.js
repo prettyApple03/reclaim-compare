@@ -52,27 +52,49 @@ function titleBlock({ number, heading, source, url, logo, stamp }) {
   </div>`;
 }
 
-const recommended = (s) => ({ selective: "분별해체", crush: "압쇄해체", tie: "동일" })[s.recommended] ?? "판정 보류";
+const methodLabel = { selective: "전면 분별", crush: "일괄 압쇄", tie: "동일" };
+
+function comparisonReview(summary) {
+  if (Array.isArray(summary.comparison_review)) return summary.comparison_review;
+  const review = [];
+  if (summary.unpriced_concrete_cut?.length) review.push("콘크리트 절단·인양 견적 미입력");
+  if (Object.values(summary.unpriced_disposal ?? {}).some(items => items?.length)) review.push("일부 품목의 처리 견적 미입력");
+  if (summary.steel_dismantling?.applied?.excluded) review.push("철골 절단·인양비 미산정");
+  if (summary.transport_input && Object.values(summary.transport_input).some(value => value == null)) review.push("운반비 비교 제외");
+  if (Object.values(summary.finish_takeoff ?? {}).some(item => item.unverified)) review.push("미확인 마감재 물량");
+  if (summary.plan_waste_reference) review.push("계획서의 폐기물 물량과 별도 공종 검토 필요");
+  if (summary.plan_example?.asbestos_cost_excluded) review.push("석면 해체·처리비 별도");
+  return review;
+}
 
 function rc01(ctx) {
   const s = ctx.summary;
   const area = s.area_m2 ? `${Number(s.area_m2).toLocaleString("ko-KR", { maximumFractionDigits: 1 })} m²` : "미입력";
+  const review = comparisonReview(s);
+  const conditional = Boolean(s.basis || review.length);
+  const result = methodLabel[s.included_cost_result ?? s.recommended];
+  const includedHeading = conditional ? "포함 비용 소계" : "순비용 비교";
   const rows = [
     ["일괄 압쇄", won(s.crush_total_won), true],
     ["전면 분별", won(s.selective_total_won), true],
     ["차액 (분별 − 압쇄)", signedWon(s.delta_won), true],
-    ["분별이 더 저렴할 확률", `${(Number(s.p_selective_cheaper) * 100).toFixed(1)}%`, false],
-    ["비교 결과", recommended(s), false],
+    ["설정 범위에서 분별 순비용이 낮은 시행 비율", s.p_selective_cheaper == null ? "미산정" : `${(Number(s.p_selective_cheaper) * 100).toFixed(1)}%`, false],
+    ...(conditional && result ? [["포함 비용 비교", result === "동일" ? result : result + " 낮음", false]] : []),
+    ["공법 권장", (conditional ? null : methodLabel[s.recommended]) ?? "판정 보류", false],
   ];
-  const unpriced = s.unpriced_concrete_cut?.length || Object.values(s.unpriced_disposal ?? {}).some((v) => v?.length);
   return `<section class="rp-sheet rp-portrait">
     <div class="rp-frame">
       <div class="rp-body rp-01">
         <div class="rp-box rp-title"><h1>RC-01&nbsp;&nbsp;해체 공법 경제성 비교</h1><p>${esc(s.source === "area" ? "면적 원단위 계산" : s.source)}&nbsp;&nbsp;·&nbsp;&nbsp;연면적 ${esc(area)}</p></div>
-        <div class="rp-box"><h2>순비용 비교</h2>
+        <div class="rp-box"><h2>${includedHeading}</h2>
           <table class="rp-compare"><thead><tr><th>항목</th><th>결과</th></tr></thead><tbody>
           ${rows.map(([label, value, amount]) => `<tr><td>${label}</td><td class="${amount ? "rp-amount" : ""}">${esc(value)}</td></tr>`).join("")}
           </tbody></table>
+          ${s.comparison_scope ? `<p class="rp-note"><strong>해체 범위</strong> · ${esc(s.comparison_scope)}</p>` : ""}
+          ${s.schedule_basis?.label ? `<p class="rp-note"><strong>공기 근거</strong> · ${esc(s.schedule_basis.label)}</p>` : ""}
+          ${review.length ? `<p class="rp-note"><strong>판정에 필요한 확인 사항</strong></p>
+            <ul class="rp-review">${review.map(item => `<li>${esc(item)}</li>`).join("")}</ul>`
+            : conditional ? '<p class="rp-note">표시된 비용은 입력 조건으로 비교한 소계입니다.</p>' : ""}
           <p class="rp-note">${ctx.elements.length ? `부재 ${ctx.elements.length.toLocaleString("ko-KR")}개 집계 · 부재별 결과는 RC-02 및 RC-03 참조` : "면적 원단위 계산 · 부재별 결과 없음"}</p>
         </div>
         <div class="rp-box rp-figure"><h2>해체 대상 3D</h2>
@@ -80,7 +102,6 @@ function rc01(ctx) {
         </div>
         <div class="rp-box rp-figure"><h2>공법별 비용 구성</h2>
           ${ctx.chartPng ? `<img src="data:image/png;base64,${ctx.chartPng}" alt="공법별 비용 구성">` : `<p class="rp-empty">비용 그래프를 만들지 못했습니다.</p>`}
-          ${unpriced ? `<p class="rp-note">일부 항목은 미산정 상태입니다.</p>` : ""}
         </div>
       </div>
       ${titleBlock({ ...ctx, source: ctx.summary.source, number: "RC-01", heading: "경제성 비교" })}
@@ -97,6 +118,7 @@ function methodSheet(ctx, { number, name, heading, rows, costs, net, scope, fiel
   const size = rowSize(parts[0]?.length ?? 0, available);
   const total = fields.reduce((sum, field) => sum + field[3], 0);
   const cols = `<colgroup>${fields.map((field) => `<col style="width:${(field[3] / total * 100).toFixed(2)}%">`).join("")}</colgroup>`;
+  const conditional = Boolean(ctx.summary.basis || comparisonReview(ctx.summary).length);
   const table = (part) => `<table class="rp-schedule">${cols}<thead>
       <tr><th colspan="${fields.length}" class="rp-schedule-title">${esc(name)}</th></tr>
       <tr>${fields.map(([label, , right]) => `<th${right ? ' class="r"' : ""}>${label}</th>`).join("")}</tr>
@@ -109,14 +131,14 @@ function methodSheet(ctx, { number, name, heading, rows, costs, net, scope, fiel
           <tr><td class="rp-k">대상 IFC</td><td>${esc(ctx.summary.source)}</td></tr>
           <tr><td class="rp-k">건물 전체 처리비</td><td class="rp-k">건물 전체 매각수익</td></tr>
           <tr><td class="rp-big">${costs ? won(costs.disposal) : "자료 없음"}</td><td class="rp-big">${costs ? won(costs.revenue) : "자료 없음"}</td></tr>
-          <tr><td colspan="2">${esc(scope)}</td></tr>
+          <tr><td colspan="2">${ctx.summary.comparison_scope ? `<strong>해체 범위</strong> · ${esc(ctx.summary.comparison_scope)}<br>` : ""}${esc(scope)}</td></tr>
         </table>
         <div class="rp-columns" style="--rp-cols:${columns};--rp-row:${size.row.toFixed(2)}mm;--rp-font:${size.font.toFixed(2)}mm">
           ${parts.map(table).join("")}
         </div>
         <table class="rp-grid rp-total">
           ${unattributed ? `<tr><td class="rp-k">부재 미귀속 처리비 · 매각수익<br><span class="rp-hint">원단위 보충·수동 보정 등 부재에 연결할 수 없는 금액. 부재별 소계 + 미귀속 = 건물 전체</span></td><td>처리비 ${won(unattributed.disposal)} · 매각수익 ${won(unattributed.revenue)}</td></tr>` : ""}
-          <tr><td class="rp-k">최종 합계 · 건물 전체 순비용</td><td class="rp-big">${won(net)}</td></tr>
+          <tr><td class="rp-k">${conditional ? "포함 범위의 순비용 소계 · RC-01 확인 사항 참조" : "건물 전체 순비용"}</td><td class="rp-big">${won(net)}</td></tr>
         </table>
       </div>
       ${titleBlock({ ...ctx, source: ctx.summary.source, number, heading })}

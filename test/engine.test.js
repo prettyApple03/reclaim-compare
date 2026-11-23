@@ -374,6 +374,24 @@ test("현장 설치량은 면적이나 용도 대신 입력값을 쓰고 확인�
   assert.equal(confirmed.selective.rows.some(row => row.item === "피복 전선 (현장 설치량 추정)"), false);
 });
 
+test("폐전선 계근값은 입력한 공법만 대체하고 0t도 적용한다", () => {
+  const input = { ...q, fixedComparison: true, t: {}, cableInstalled: 1 };
+  const sale = (result, item) => Math.abs(result.rows.find(row => row.item === item)?.amount ?? 0);
+  const estimated = "피복 전선 (현장 설치량 추정)";
+  const measured = "별도 계근 폐전선";
+  const selectiveOnly = compare({ ...input, cableSel: 0.75 }, p);
+  assert.equal(sale(selectiveOnly.crush, estimated), 1890000);
+  assert.equal(sale(selectiveOnly.selective, estimated), 0);
+  assert.equal(sale(selectiveOnly.selective, measured), 2700000);
+
+  const crushZero = compare({ ...input, cableCrush: 0 }, p);
+  assert.ok(!crushZero.crush.rows.some(row => row.item === estimated || row.item === measured));
+  assert.equal(sale(crushZero.selective, estimated), 3150000);
+  const commonZero = compare({ ...input, cableCommon: 0, cableSel: 0.75 }, p);
+  assert.ok(!commonZero.crush.rows.some(row => row.item === estimated || row.item === measured));
+  assert.equal(sale(commonZero.selective, measured), 2700000);
+});
+
 test("공법별 콘크리트 절단·인양 견적은 해당 구간의 압쇄 작업을 대체한다", () => {
   const input = { ...q, equipment: "large", concrete_m3: 100, masonry_m3: 25 };
   const base = compare(input, p);

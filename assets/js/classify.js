@@ -1,5 +1,5 @@
 // IFC 부재(종류·재료 층·부피·면적) → 폐기물 성상별 톤수. DOM·web-ifc를 쓰지 않는다.
-import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js";
+import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, pvcFrameRecovery, rebarTons, streamTons } from "./scenario.js?v=scope-report-20261123";
 
 export const CATEGORY_LABEL = {
   wall: "벽", slab: "슬래브", beam: "보", column: "기둥", footing: "기초", stair: "계단", roof: "지붕",
@@ -178,7 +178,10 @@ export function connectFinishTakeoff(q, raw, rates, params) {
     const hasWeight = inputWeight != null || measured > 0;
     const modeledArea = q.finishAreas[key];
     const unverified = q.finishFallbackDisabled && !hasWeight && modeledArea == null;
-    const area = modeledArea ?? (hasWeight ? measured / tonsPerArea : unverified ? 0 : q.area_m2 * params["int_" + key + "_ratio"]);
+    const estimatedArea = key === "board"
+      ? Math.max(0, q.area_m2 * params.int_board_ratio - (q.finishAreaExclusions?.board ?? 0))
+      : Math.max(0, q.area_m2 - (q.finishAreaExclusions?.floor ?? 0)) * params.int_tile_ratio;
+    const area = modeledArea ?? (hasWeight ? measured / tonsPerArea : unverified ? 0 : estimatedArea);
     const tons = hasWeight ? measured : area * tonsPerArea;
     q.finishAreas[key] = area;
     q.t[key] = tons;
@@ -260,6 +263,25 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
     : s === "aluminum" ? nonferrous * p.price_aluminum
     : s === "wood" ? split.wood * gain(p.net_wood)
     : s === "resin" ? split.resin * gain(p.net_resin) : 0;
+  const pvcShare = pvcFrameRecovery(q, sel);
+  const pvcPrice = (q.pvcPrice ?? 0) * 1000;
+  const isPvcFrame = (el, part) => q.pvcFrameTons > 0 && part.stream === "resin"
+    && (el.category === "window" || part.windowAssembly);
+  const partFee = (el, part) => {
+    if (isPvcFrame(el, part)) return pvcShare * cost(pvcPrice) + (1 - pvcShare) * mixedFee;
+    if (q.windowMode && part.stream === "glass" && (el.category === "window" || el.parts.some(x => x.windowAssembly))) {
+      return p.fee_mixed_unverified;
+    }
+    return fee(part.stream);
+  };
+  const partPrice = (el, part) => {
+    if (isPvcFrame(el, part)) return pvcShare * gain(pvcPrice);
+    if (q.windowMode && part.stream === "aluminum" && (el.category === "window" || part.windowAssembly)) {
+      return q.alPrice == null ? p.price_aluminum : q.alPrice * 1000;
+    }
+    if (q.steelWork && isStructuralSteelPart(el, part)) return (p.rec_structural_steel ?? p.rec_scrap_sel) * p.price_scrap;
+    return price(part.stream);
+  };
   // 구조 콘크리트 안의 철근 추정량은 엔진과 같이 폐콘크리트에서 빼서 고철로 센다
   // 모델 철근이 있으면 엔진과 같이: 콘크리트에서는 철근 전체를 빼고, 고철 수익은 모델에 없는 추정분만 콘크리트 부재에 배분한다
   const total = q.concrete_m3 > 0 ? streamTons({ ...q, t: { concrete: Infinity } }, p) : null;
@@ -272,12 +294,10 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
     // 처리 방식은 실제로 적용한 작업이다. 철근 회수 효과는 아래 금액(공법별 회수율)에 반영한다.
     method: el.stream === EXCLUDED ? "제외" : sel && SEPARATED.has(el.stream) ? "분별 해체" : "압쇄 해체",
     tons: el.tons,
-    disposal: el.parts.reduce((s, x) => s + (x.tons - rebarOf(el, x)) * (q.windowMode && x.stream === "glass" && (el.category === "window" || el.parts.some(part => part.windowAssembly)) ? p.fee_mixed_unverified : fee(x.stream))
+    disposal: el.parts.reduce((s, x) => s + (x.tons - rebarOf(el, x)) * partFee(el, x)
       + (q.fixedComparison && x.stream === "metal" && el.category !== "rebar" ? x.tons * (1 - (q.steelWork && isStructuralSteelPart(el, x) ? p.rec_structural_steel ?? p.rec_scrap_sel : scrapRecovery)) * p.fee_mixed_unverified : 0)
       + rebarOf(el, x) * (1 - scrapRecovery) * p.fee_concrete, 0),
-    revenue: el.parts.reduce((s, x) => s + x.tons * ((el.category === "window" || x.windowAssembly) && x.stream === "aluminum" && q.windowMode
-      ? q.alPrice == null ? p.price_aluminum : q.alPrice * 1000
-      : q.steelWork && isStructuralSteelPart(el, x) ? (p.rec_structural_steel ?? p.rec_scrap_sel) * p.price_scrap : price(x.stream)) + rebarOf(el, x) * sold * price("metal"), 0),
+    revenue: el.parts.reduce((s, x) => s + x.tons * partPrice(el, x) + rebarOf(el, x) * sold * price("metal"), 0),
   }));
 }
 

@@ -2,7 +2,7 @@
 // 계획서의 구조도면(그리드, 부재 목록, 배치)을 옮긴 JSON만 있으면 Revit 없이 구조체 모델이 만들어진다.
 // 좌표는 mm, y는 도면처럼 아래로 증가. 보·벽은 축에 나란한 선분만 지원한다.
 
-import { materialClass } from "./classify.js";
+import { materialClass } from "./classify.js?v=scope-report-20261123";
 
 const m = (mm) => mm / 1000;
 // 부재 재료: section.material이 있으면 그 이름(예: "Brick masonry", "Steel SS400"), 없으면 콘크리트
@@ -131,10 +131,11 @@ export function planConditions(plan, { sites = {}, equipments = {} } = {}) {
     else out.structure = /^(rc$|철근콘크리트)/i.test(structure) && !/조적|복합/.test(structure) ? "rc" : "other";
   }
   const scope = d.scope?.trim() || "";
-  if (["above", "partial", "full", "unknown"].includes(scope)) out.scope = scope;
+  if (["above", "below", "partial", "full", "unknown"].includes(scope)) out.scope = scope;
   else if (/^지상/.test(scope)) out.scope = "above";
+  else if (/^지하/.test(scope)) out.scope = "below";
   else if (/^전체|^전부/.test(scope)) out.scope = "full";
-  else if (/일부|부분|^지하/.test(scope)) out.scope = "partial";
+  else if (/일부|부분/.test(scope)) out.scope = "partial";
   if (out.scope || out.structure) notes.push("계획서 구조형식·해체 범위 반영");
   const method = d.method || "";
   const explicit = Object.hasOwn(equipments, d.equipment) && d.equipment !== "auto";

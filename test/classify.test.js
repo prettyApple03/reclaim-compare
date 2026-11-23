@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { classify, materialClass, isOpenSteelFrame, quantitiesFromElements, supplement, elementResults, toCsv, groupKey } from "../assets/js/classify.js";
+import { classify, materialClass, isOpenSteelFrame, quantitiesFromElements, supplement, elementResults, reconcileElementResults, toCsv, groupKey } from "../assets/js/classify.js";
 import { meshVolume, meshSurface, massUnitTons } from "../assets/js/ifc.js";
 import { costScenario, paramValues, quantitiesFromArea } from "../assets/js/scenario.js";
 
@@ -116,4 +116,26 @@ test("일괄 압쇄 부재표는 건물 전체와 같은 보드·타일 처리 �
   assert.ok(Math.abs(rows[0].disposal - (2 * 12345 + 4 * scenario.mixed.fee + 4 * p.fee_concrete)) < 1e-8);
   assert.ok(Math.abs(rows[1].disposal - 10 * scenario.mixed.fee) < 1e-8);
   assert.ok(Math.abs(rows[0].disposal + rows[1].disposal - scenario.disposal) < 1e-8);
+});
+
+test("PVC 창틀의 처리비와 매각수익을 원래 부재에 기록한다", () => {
+  const p = paramValues(rates);
+  const frame = { ...el("window", []), stream: "resin", tons: 1, parts: [{ stream: "resin", tons: 1 }] };
+  const pipe = { ...el("pipe", []), tag: "43", stream: "resin", tons: 0.2, parts: [{ stream: "resin", tons: 0.2 }] };
+  const parts = [frame, pipe];
+  const q = { ...quantitiesFromElements(parts, 100), fixedComparison: true, pvcFrameTons: 1, windowMode: "both" };
+  for (const mode of ["crush", "selective"]) {
+    for (const pvcPrice of [undefined, -150, 0, 500]) {
+      const input = { ...q, pvcPrice };
+      const scenario = costScenario(input, p, mode);
+      const rows = elementResults(parts, p, scenario.mixed.fee, input, mode, scenario);
+      near(rows[0].revenue, Math.max(0, pvcPrice ?? 0) * 1000);
+      near(rows[0].disposal, pvcPrice == null ? scenario.mixed.fee : Math.max(0, -pvcPrice) * 1000);
+      near(rows[0].disposal + rows[1].disposal, scenario.disposal);
+      near(rows[0].revenue + rows[1].revenue, scenario.revenue);
+      const reconciled = reconcileElementResults(rows, 1.2, scenario);
+      assert.equal(reconciled.length, 2);
+      assert.equal(toCsv(reconciled).split("\n")[1].split(",").at(-1), String(Math.round(rows[0].revenue)));
+    }
+  }
 });

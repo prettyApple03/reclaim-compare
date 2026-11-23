@@ -13,6 +13,7 @@ import tempfile
 from collections import Counter
 from math import ceil, isinf, isnan
 from uuid import uuid4
+from xml.sax.saxutils import escape
 
 TEXT = ("RC_Waste", "RC_Method")
 NUMBER = ("RC_Tons", "RC_DisposalCost", "RC_Revenue")
@@ -26,6 +27,8 @@ SHEET_NAME = u"해체 경제성 비교"
 VIEW_NAME = u"ReClaim - 해체 대상 3D"
 SCHEDULE_NAME = u"ReClaim - 폐기물 성상별 집계 (전면 분별)"
 DETAIL_NAME = u"ReClaim - 부재별 해체 결과 (전면 분별)"
+SIMULATION_LABEL = u"설정 범위에서 분별 순비용이 낮은 시행 비율"
+METHOD_LABEL = {"selective": u"전면 분별", "crush": u"일괄 압쇄", "tie": u"동일"}
 
 
 def read_export_text(path):
@@ -84,34 +87,97 @@ def read_revit_export(path):
 
 def summary_text(s):
     """요약 JSON → 프로젝트 정보에 넣을 한 줄."""
-    return u"압쇄 {:,}원 / 분별 {:,}원 / 차이 {:,}원 / 분별이 더 쌀 확률 {:.1%} / 권장 {}".format(
-        s["crush_total_won"], s["selective_total_won"], s["delta_won"], float(s["p_selective_cheaper"]),
-        recommended_method(s))
+    return u"{} · 압쇄 {:,}원 / 분별 {:,}원 / 차이 {:,}원 / {} {} / 공법 권장 {}".format(
+        comparison_heading(s), s["crush_total_won"], s["selective_total_won"], s["delta_won"],
+        SIMULATION_LABEL, selective_share(s), comparison_result(s))
+
+
+def comparison_review(s):
+    review = s.get("comparison_review")
+    if isinstance(review, list):
+        return [item for item in review if isinstance(item, TEXT_TYPE) and item]
+    # 이전 결과 파일에서도 이미 기록된 누락을 비교 범위에 반영한다.
+    review = []
+    if s.get("unpriced_concrete_cut"):
+        review.append(u"콘크리트 절단·인양 견적 미입력")
+    if any((s.get("unpriced_disposal") or {}).values()):
+        review.append(u"일부 품목의 처리 견적 미입력")
+    if ((s.get("steel_dismantling") or {}).get("applied") or {}).get("excluded"):
+        review.append(u"철골 절단·인양비 미산정")
+    transport = s.get("transport_input")
+    if transport and any(value is None for value in transport.values()):
+        review.append(u"운반비 비교 제외")
+    if any(item.get("unverified") for item in (s.get("finish_takeoff") or {}).values()):
+        review.append(u"미확인 마감재 물량")
+    if s.get("plan_waste_reference"):
+        review.append(u"계획서의 폐기물 물량과 별도 공종 검토 필요")
+    if (s.get("plan_example") or {}).get("asbestos_cost_excluded"):
+        review.append(u"석면 해체·처리비 별도")
+    return review
+
+
+def comparison_heading(s):
+    return u"포함 비용 소계" if s.get("basis") or comparison_review(s) else u"순비용 비교"
+
+
+def selective_share(s):
+    value = s.get("p_selective_cheaper")
+    return u"미산정" if value is None else u"{:.1%}".format(float(value))
 
 
 def recommended_method(s):
-    return {"selective": u"분별해체", "crush": u"압쇄해체", "tie": u"동일"}.get(s["recommended"], u"판정 보류")
+    if s.get("basis") or comparison_review(s):
+        return u"판정 보류"
+    return METHOD_LABEL.get(s.get("recommended"), u"판정 보류")
+
+
+def included_cost_result(s):
+    method = METHOD_LABEL.get(s.get("included_cost_result", s.get("recommended")))
+    if method == u"동일":
+        return method
+    return method + u" 낮음" if method else None
+
+
+def comparison_result(s):
+    recommended = recommended_method(s)
+    included = included_cost_result(s)
+    if included and (s.get("basis") or comparison_review(s)):
+        return recommended + u" · 소계에서 " + included
+    return recommended
 
 
 def sheet_text(s, done, missing):
     area = s.get("area_m2")
     area_text = u"{:,.1f} ㎡".format(area) if area else u"미입력"
-    scope = (u"\n미산정 항목이 있습니다." if
-             s.get("unpriced_concrete_cut") or any((s.get("unpriced_disposal") or {}).values()) else u"")
+    lines = [u"", u"부재 결과 · {}개 기록 / {}개 매칭 또는 기록 실패".format(done, missing),
+             u"부재별 결과는 RC-02 전면 분별과 RC-03 일괄 압쇄 시트에서 확인할 수 있습니다."]
+    scope = s.get("comparison_scope")
+    if scope:
+        lines.append(u"해체 범위 · " + scope)
+    schedule = (s.get("schedule_basis") or {}).get("label")
+    if schedule:
+        lines.append(u"공기 근거 · " + schedule)
+    lines.extend(u"확인 필요 · " + reason for reason in comparison_review(s))
     return u"\n".join((
         SHEET_NAME,
-        u"대상: {} / 연면적: {}".format(s.get("source") or u"IFC 모델", area_text),
-        u"",
+        u"대상 {} / 연면적 {}".format(s.get("source") or u"IFC 모델", area_text),
+        comparison_heading(s),
         u"압쇄해체 순비용    {:,} 원".format(s["crush_total_won"]),
         u"분별해체 순비용    {:,} 원".format(s["selective_total_won"]),
         u"순비용 차이(분별 − 압쇄)    {:+,} 원".format(s["delta_won"]),
-        u"분별해체가 더 저렴할 확률    {:.1%}".format(float(s["p_selective_cheaper"])),
-        u"비교 결과    {}".format(recommended_method(s)),
-        u"",
-        u"부재 결과: {}개 기록 / {}개 매칭 또는 기록 실패".format(done, missing),
-        u"부재별 결과는 RC-02 전면 분별과 RC-03 일괄 압쇄 시트에서 확인할 수 있습니다.",
-        u"건물 전체 순비용에는 인건비·장비비 등 공통 비용도 반영됩니다. 형상에 대응하지 않는 보정량은 부재 집계에서 제외합니다." + scope,
-    ))
+        SIMULATION_LABEL + u"    " + selective_share(s),
+        u"공법 권장    {}".format(comparison_result(s)),
+    ) + tuple(lines))
+
+
+def numeric_element_id(value, max_id):
+    if not re.match(r"[0-9]+\Z", value):
+        return None
+    digits = value.lstrip("0")
+    if not digits or len(digits) > 19:
+        return None
+    number = int(digits)
+    return number if number <= max_id else None
 
 
 def make_schedule(DB, doc, name, parameters, run_id, grouped):
@@ -577,7 +643,9 @@ def draw_method_page(DB, doc, sheet, number, name, instances, data, costs):
                                        (right, u"처리비 {:,}원 · 매각수익 {:,}원".format(
                                            int(unattributed["disposal"]), int(unattributed["revenue"])), 6, False)])
         bottom -= 0.10
-    grid.row(left, right, bottom, [(middle, u"최종 합계 · 건물 전체 순비용", 7, True),
+    net_label = (u"포함 범위의 순비용 소계 · RC-01 확인 사항 참조"
+                 if data.get("basis") or comparison_review(data) else u"건물 전체 순비용")
+    grid.row(left, right, bottom, [(middle, net_label, 7, True),
                                    (right, u"{:,}원".format(net), 10, True)], 0.12)
     draw_sheet_border(DB, doc, sheet, data)
     return sheet
@@ -783,11 +851,13 @@ def draw_comparison_layout(DB, doc, sheet, data, done, missing):
     area = data.get("area_m2")
     area_text = u"{:,.1f} m\u00b2".format(float(area)) if area else u"미입력"
     text(0.135, 2.31, u"{}  ·  연면적 {}".format(data.get("source") or u"IFC 모델", area_text))
+    if data.get("comparison_scope"):
+        text(0.135, 2.275, u"해체 범위 · " + data["comparison_scope"])
     for y in (2.46, 2.34, 2.24):
         rule(0.10, y, 1.90, y)
     for x in (0.10, 1.90):
         rule(x, 2.24, x, 2.46)
-    frame(0.10, 1.90, 2.21, 1.46, u"순비용 비교")
+    frame(0.10, 1.90, 2.21, 1.46, comparison_heading(data))
     frame(0.10, 1.90, 1.43, 0.71, u"해체 대상 3D")
     frame(0.10, 1.90, 0.68, 0.13, u"공법별 비용 구성")
 
@@ -796,12 +866,12 @@ def draw_comparison_layout(DB, doc, sheet, data, done, missing):
         (u"일괄 압쇄", u"{:,}원".format(data["crush_total_won"])),
         (u"전면 분별", u"{:,}원".format(data["selective_total_won"])),
         (u"차액 (분별 − 압쇄)", u"{:+,}원".format(data["delta_won"])),
-        (u"분별이 더 저렴할 확률", u"{:.1%}".format(float(data["p_selective_cheaper"]))),
-        (u"비교 결과", recommended_method(data)),
+        (SIMULATION_LABEL, selective_share(data)),
+        (u"공법 권장", comparison_result(data)),
     )
     for index, (label, value) in enumerate(rows):
         y = 2.12 - index * 0.087
-        role = "Heading" if index in (0, 5) else "Table"
+        role = "Heading" if index in (0, 5) else "Body" if index == 4 else "Table"
         value_role = "Amount" if index in (1, 2, 3) else role
         text(0.135, y - 0.022, label, role)
         text(1.865, y - 0.022, value, value_role, right=True)
@@ -809,9 +879,17 @@ def draw_comparison_layout(DB, doc, sheet, data, done, missing):
     rule(1.0, 2.12, 1.0, 2.12 - len(rows) * 0.087)
     text(0.135, 1.584, u"부재 {}개 기록 · 매칭 또는 기록 실패 {}개".format(done, missing))
     rule(0.10, 1.53, 1.90, 1.53)
-    text(0.135, 1.52, u"부재별 결과는 RC-02 및 RC-03 참조")
-    if data.get("unpriced_concrete_cut") or any((data.get("unpriced_disposal") or {}).values()):
-        text(0.10, 0.105, u"일부 항목은 미산정 상태입니다.")
+    basis = (data.get("schedule_basis") or {}).get("label")
+    text(0.135, 1.52, u"공기 근거 · " + basis if basis else u"부재별 결과는 RC-02 및 RC-03 참조")
+    review = comparison_review(data)
+    if data.get("basis") or review:
+        if review:
+            first = review[0].replace(u"\n", u" ")
+            shown = first if len(first) <= 54 else first[:53] + u"…"
+            notice = u"확인 사항 {}건 · {} · 전체는 실행 결과와 요약 JSON 참조".format(len(review), shown)
+        else:
+            notice = u"입력 조건의 소계"
+        text(0.135, 0.105, notice)
     if not data.get("cost_chart_png"):
         text(0.135, 0.53, u"비용 그래프는 사이트에서 새로 받은 Revit용 결과에 포함됩니다.")
 
@@ -879,9 +957,19 @@ def run_in_revit():
     except (IOError, ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
         forms.alert(u"Revit용 결과를 읽지 못했습니다.\n{}\n\n오류: {}".format(os.path.basename(path), error))
         return
+    supports_long_ids = int(app.VersionNumber) >= 2024
+    max_id = 9223372036854775807 if supports_long_ids else 2147483647
+    targets = [(row, numeric_element_id(row["ElementId"], max_id))
+               for row in rows if row.get("Category") != "adjustment"]
+    ids = Counter(number for _, number in targets if number is not None)
+    unique_ids = sum(count == 1 for count in ids.values())
+    if not unique_ids:
+        forms.alert(u"이 결과에서 기록에 쓸 수 있는 고유한 숫자형 Revit ID가 없습니다.\n"
+                    u"원본 Revit 모델에서 부재 ID가 포함된 IFC를 다시 내보내 분석하세요.")
+        return
     if not forms.alert(
-            u"분석 대상: {}\n열린 Revit 모델: {}\n\n이 모델에 결과를 적용하시겠습니까?".format(
-                data["source"], doc.Title), yes=True, no=True):
+            u"분석 대상 · {}\n열린 Revit 모델 · {}\n고유한 숫자형 ID · {} / {}개\n\n이 모델에 결과를 적용하시겠습니까?".format(
+                data["source"], doc.Title, unique_ids, len(targets)), yes=True, no=True):
         return
     run_id = uuid4().hex
 
@@ -924,13 +1012,14 @@ def run_in_revit():
             done = 0
             failures = Counter()
             keys = TEXT + NUMBER + (RUN_PARAMETER,)
-            for r in rows:
-                if r.get("Category") == "adjustment":
+            for r, number in targets:
+                if number is None:
+                    failures[(u"숫자형 Revit ID 없음", r["Category"])] += 1
                     continue
-                el = None
-                if r["ElementId"].isdigit():
-                    number = int(r["ElementId"])
-                    el = doc.GetElement(DB.ElementId(Int64(number) if int(app.VersionNumber) >= 2024 else number))
+                if ids[number] != 1:
+                    failures[(u"IFC에 같은 Revit ID가 여러 번 기록됨", r["Category"])] += 1
+                    continue
+                el = doc.GetElement(DB.ElementId(Int64(number) if supports_long_ids else number))
                 if el is None:
                     failures[(u"모델에 해당 ID 없음", r["Category"])] += 1
                     continue
@@ -973,6 +1062,8 @@ def run_in_revit():
     out.print_md(u"**{}개 부재에 기록했습니다.** 매칭 또는 기록 실패: {}개".format(done, missing))
     for (reason, category), count in sorted(failures.items()):
         out.print_md(u"- {} · {}: {}개".format(reason, category, count))
+    for reason in comparison_review(data):
+        out.print_md(u"- 확인 필요 · {}".format(escape(reason)))
     out.print_md(u"**시트 {} — {}** · 프로젝트 탐색기의 시트에서 확인하세요.".format(sheet.SheetNumber, sheet.Name))
     out.print_md(u"공법별 상세 시트: " + u", ".join(page_numbers))
     revit.uidoc.RequestViewChange(sheet)
@@ -995,6 +1086,18 @@ if __name__ == "__main__":
         assert u"-2,000 원" in sheet_text(data, 8, 1)
         assert u"8개 기록 / 1개" in sheet_text(data, 8, 1)
         assert u"판정 보류" in sheet_text(dict(data, recommended=None), 8, 1)
+        incomplete = dict(data, basis=u"포함 항목 기준", included_cost_result="selective",
+                          comparison_scope=u"지하층", schedule_basis={"label": u"현장 공정표"},
+                          comparison_review=[u"석면 해체비 미입력"])
+        assert u"공법 권장 판정 보류" in summary_text(incomplete)
+        assert u"소계에서 전면 분별 낮음" in summary_text(incomplete)
+        assert u"확인 필요 · 석면 해체비 미입력" in sheet_text(incomplete, 8, 1)
+        assert u"설정 범위에서 분별 순비용이 낮은 시행 비율" in sheet_text(incomplete, 8, 1)
+        assert included_cost_result(incomplete) == u"전면 분별 낮음"
+        assert recommended_method(dict(data, transport_input={"crush": 0, "selective": None})) == u"판정 보류"
+        assert numeric_element_id(u"000123", 2147483647) == 123
+        assert all(numeric_element_id(value, 2147483647) is None
+                   for value in (u"", u"0", u"123\n", u"ID123", u"2147483648"))
         assert [column_count(h) for h in (0.5, 1.35, 2.0, 3.5, 5.0, 12.0)] == [1, 1, 2, 3, 4, 9]
         print("self-check ok: CSV parsing, comparison labels and schedule columns")
     else:

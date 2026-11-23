@@ -110,6 +110,41 @@ export function grossArea(elements, size, floors) {
   return area > 0 ? { area, basis: "slab" } : { area: size[0] * size[2] * floors, basis: "bbox" };
 }
 
+export function ifcScopeElements(elements, scope, { includeBasementCap = true, includeFoundation = true } = {}) {
+  if (scope === "above") return elements.filter(el => !el.basement && el.category !== "footing");
+  if (scope !== "below") return elements;
+  return elements.filter(el => el.category === "footing" ? includeFoundation
+    : el.basement || (includeBasementCap && el.basementCap));
+}
+
+function scopeGeometry(elements, size, storeys) {
+  const storeyElements = new Map();
+  for (const el of elements) {
+    if (el.category !== "other" && el.category !== "footing" && (el.volume > 0 || el.area > 0)) {
+      const onFloor = storeyElements.get(el.floor) ?? [];
+      onFloor.push(el);
+      storeyElements.set(el.floor, onFloor);
+    }
+  }
+  const occupied = [...storeyElements.values()].flat();
+  const below = occupied.filter(el => el.basement);
+  const above = occupied.filter(el => !el.basement && !el.roofLevel);
+  const basementCapCount = above.filter(el => el.basementCap).length;
+  // A ground-floor slab can be the ceiling of B1. It is not by itself an above-ground storey.
+  const basementOnlyCandidate = below.length > 0 && !above.some(el => !el.basementCap);
+  const basementFloors = new Set(below.map(el => el.floor)).size;
+  const aboveGround = basementOnlyCandidate ? [] : above;
+  const aboveFloors = new Set(aboveGround.map(el => el.floor)).size;
+  const belowArea = basementFloors ? grossArea(below, size, basementFloors) : { area: 0, basis: "none" };
+  const aboveGroundArea = aboveFloors ? grossArea(aboveGround, size, aboveFloors) : { area: 0, basis: "none" };
+  return {
+    aboveFloors, aboveArea: aboveGroundArea.area, aboveBasis: aboveGroundArea.basis,
+    basementFloors, basementArea: belowArea.area, basementBasis: belowArea.basis, basementCapCount, basementOnlyCandidate,
+    storeys: storeys.map((story, idx) => ({ floor: idx + 1, name: story.name, elevation_m: story.elevation_m,
+      basement: story.basement, roof: story.roof, elementCount: storeyElements.get(idx + 1)?.length ?? 0 })),
+  };
+}
+
 // 모든 하위 가지에 집계 가능한 부재가 있는 경우에만 집합 부모를 제외한다.
 export function dropAggregateParents(acc, parts) {
   const hasGeometry = (id, seen = new Set()) => {
@@ -225,7 +260,11 @@ export async function parseIfc(buffer) {
       .map((id) => {
         const level = api.GetLine(model, id);
         const name = String(level.Name?.value ?? "").trim();
-        return { id, elev: level.Elevation?.value ?? 0, basement: /^(?:B\s*\d+|지하|Basement)/i.test(name), roof: /^(?:RF\b|PH\b|Roof|옥상|옥탑|지붕)/i.test(name) };
+        const elev = Number(level.Elevation?.value ?? 0);
+        return { id, name, elev, elevation_m: elev * scale,
+          basement: /^(?:(?:level|floor|fl)\s*)?(?:B\s*\d+|지하|Basement|Underground)/i.test(name),
+          ground: /^(?:G(?:round\s*(?:floor)?)?F?|(?:지상\s*)?1\s*층|[01]\s*F|(?:level|floor|l)[\s_-]*[01])(?:\b|$)/i.test(name),
+          roof: /^(?:RF\b|PH\b|Roof|옥상|옥탑|지붕)/i.test(name) };
       })
       .sort((a, b) => a.elev - b.elev);
     const floorOfStorey = new Map(storeys.map((s, i) => [s.id, i + 1]));
@@ -320,6 +359,8 @@ export async function parseIfc(buffer) {
       if (parent != null && !floorOf.has(id) && floorOf.has(parent)) floorOf.set(id, floorOf.get(parent));
       if (parent != null && !matOf.has(id) && matOf.has(parent)) matOf.set(id, matOf.get(parent));
     }
+    const lastBasement = storeys.findLastIndex(story => story.basement);
+    const groundFloor = lastBasement >= 0 && storeys[lastBasement + 1]?.ground ? lastBasement + 2 : -1;
     const elements = [...acc].map(([id, a]) => {
       const line = api.GetLine(model, id);
       let category = a.category;
@@ -327,12 +368,15 @@ export async function parseIfc(buffer) {
       if (category === "slab" && pre === "BASESLAB") category = "footing";
       if (category === "slab" && pre === "ROOF") category = "roof";
       const w = (Number(line.OverallWidth?.value) || 0) * scale, h = (Number(line.OverallHeight?.value) || 0) * scale;
+      const floor = floorOf.get(id);
+      const storey = storeys[(floor ?? 0) - 1];
       return {
         expressID: id, globalId: line.GlobalId?.value || "", tag: line.Tag?.value || "", name: line.Name?.value || "",
         category, bounds: a.bounds, predefined: pre || "",
-        basement: storeys[(floorOf.get(id) ?? 0) - 1]?.basement ?? false,
-        roofLevel: storeys[(floorOf.get(id) ?? 0) - 1]?.roof ?? false,
-        floor: category === "footing" ? 0 : floorOf.get(id) || 1,
+        basement: storey?.basement ?? false,
+        basementCap: floor === groundFloor && (category === "slab" || category === "roof"),
+        roofLevel: storey?.roof ?? false,
+        floor: category === "footing" ? 0 : floor || 1,
         ...(({ volume, source, diff }) => ({ volume, volumeSource: source, meshVolume: a.volume, volumeDiff: diff }))(pickVolume(a.volume, volumes.get(id)?.m3)),
         weightTons: weights.get(id)?.tons,
         area: openingArea(w, h, a.surface), floorFootprint: a.floorFootprint > 0 ? a.floorFootprint : undefined,
@@ -342,13 +386,11 @@ export async function parseIfc(buffer) {
     // 층수: 부재가 실제로 들어 있는 층만 센다 (Revit의 기준 레벨·지붕 레벨 제외)
     const used = new Set(elements.filter((e) => e.category !== "footing").map((e) => e.floor));
     const floors = used.size || storeys.length || 1;
-    const aboveFloors = new Set(elements.filter(e => e.category !== "footing" && !e.basement && !e.roofLevel).map(e => e.floor)).size;
-    const aboveArea = grossArea(elements.filter(e => !e.basement && !e.roofLevel && e.category !== "footing"), size, aboveFloors || 1).area;
     const buildings = ids(W.IFCBUILDING).map(id => api.GetLine(model,id));
     const description = buildings.flatMap(b => [b.Name, b.LongName, b.ObjectType, b.Description]).map(v => v?.value || "").join(" ");
     const usage = /아파트|공동주택|apartment/i.test(description) ? "공동주택"
       : /단독주택|single.family/i.test(description) ? "단독주택" : null;
-    return { meshes, elements, size, floors, aboveFloors, aboveArea, usage, lengthScale: scale, gross: grossArea(elements, size, floors),
+    return { meshes, elements, size, floors, ...scopeGeometry(elements, size, storeys), usage, lengthScale: scale, gross: grossArea(elements, size, floors),
       volumeCheck: volumeCheck(elements) };
   } finally {
     api.CloseModel(model);
