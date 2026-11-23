@@ -264,7 +264,7 @@ test("콘크리트 견적은 해당 물량만 대체하고 별도 매각분은 �
     cableCrush: 1, cableSel: 2, cablePrice: 100000 }, p);
   assert.equal(result.selective.revenue - base.selective.revenue, 200000);
   assert.equal(result.crush.revenue - base.crush.revenue, 100000);
-  assert.ok(Math.abs(base.selective.disposal - result.selective.disposal
+  assert.ok(Math.abs(base.selective.disposalComponents.processing - result.selective.disposalComponents.processing
     - q.t.concrete * 0.25 * (35290.8 - 30000)) < 0.01);
   assert.equal(compare({ ...qg, cleanSel: 25 }, p).delta, base.delta);
 });

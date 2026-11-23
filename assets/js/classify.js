@@ -1,5 +1,5 @@
 // IFC 부재(종류·재료 층·부피·면적) → 폐기물 성상별 톤수. DOM·web-ifc를 쓰지 않는다.
-import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js?v=finish-compare-20261123";
+import { SEPARATED, STREAMS, EXCLUDED, separation, concreteGrades, rebarTons, streamTons } from "./scenario.js?v=nonhyeon-compare-20261123";
 import { hasRebarDesignation, isPlanRebarMember, nonRebarConcrete } from "./rebar-evidence.js?v=salvage-20261123";
 
 export const CATEGORY_LABEL = {
@@ -483,7 +483,7 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
     // 처리 방식은 실제로 적용한 작업이다. 철근 회수 효과는 아래 금액(공법별 회수율)에 반영한다.
     method: el.stream === EXCLUDED ? "제외" : sel && SEPARATED.has(el.stream) ? "분별 해체" : "압쇄 해체",
     tons: el.tons,
-    disposal: el.parts.reduce((s, x) => s + (x.tons - rebarOf(el, x)) * partFee(el, x)
+    disposal: scenario?.disposalComponents?.allInQuote != null ? 0 : el.parts.reduce((s, x) => s + (x.tons - rebarOf(el, x)) * partFee(el, x)
       + (q.fixedComparison && x.stream === "metal" && el.category !== "rebar" ? x.tons * (1 - (q.steelWork && isStructuralSteelPart(el, x) ? p.rec_structural_steel ?? p.rec_scrap_sel : scrapRecovery)) * unsoldMetalFee : 0)
       + rebarOf(el, x) * (1 - scrapRecovery) * p.fee_concrete, 0),
     revenue: el.parts.reduce((s, x) => s + x.tons * partPrice(el, x) + rebarOf(el, x) * sold * price("metal"), 0),
@@ -491,7 +491,15 @@ export function elementResults(classified, p, mixedFee = p.fee_mixed_unverified,
 }
 
 export function reconcileElementResults(results, appliedTons, scenario) {
-  const exported = results.reduce((sum, row) => {
+  const components = scenario.disposalComponents;
+  const quoted = components?.allInQuote != null;
+  // A whole-site bid cannot be allocated to individual elements or manual frame corrections.
+  const rows = quoted ? results.map(row => row.disposal ? { ...row, disposal: 0 } : row) : [...results];
+  const adjustment = { globalId: "", tag: "", category: "adjustment", floor: "", stream: "", tons: 0, disposal: 0, revenue: 0 };
+  if (quoted || components?.collection > 0) {
+    rows.push({ ...adjustment, method: quoted ? "현장 처리·운반 일괄견적" : "현장 수집·운반비", disposal: Math.round(quoted ? components.allInQuote : components.collection) });
+  }
+  const exported = rows.reduce((sum, row) => {
     if (row.stream !== EXCLUDED) sum.weightUnits += Math.round(Number(row.tons.toFixed(4)) * 10000);
     sum.disposal += Math.round(row.disposal);
     sum.revenue += Math.round(row.revenue);
@@ -500,11 +508,8 @@ export function reconcileElementResults(results, appliedTons, scenario) {
   const weightUnits = Math.round(appliedTons * 10000) - exported.weightUnits;
   const disposal = Math.round(scenario.disposal) - exported.disposal;
   const revenue = Math.round(scenario.revenue) - exported.revenue;
-  if (weightUnits === 0 && disposal === 0 && revenue === 0) return results;
-  return [...results, {
-    globalId: "", tag: "", category: "adjustment", floor: "", stream: "",
-    method: "부재 미귀속", tons: weightUnits / 10000, disposal, revenue,
-  }];
+  if (weightUnits || disposal || revenue) rows.push({ ...adjustment, method: "부재 미귀속", tons: weightUnits / 10000, disposal, revenue });
+  return rows;
 }
 
 export function toCsv(results) {

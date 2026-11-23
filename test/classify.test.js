@@ -147,5 +147,5 @@ test("일괄 압쇄 부재표는 건물 전체와 같은 보드·타일 처리 �
   const rows = elementResults(classified, p, scenario.mixed.fee, q, "crush", scenario);
   assert.ok(Math.abs(rows[0].disposal - (2 * 12345 + 4 * scenario.mixed.fee + 4 * p.fee_concrete)) < 1e-8);
   assert.ok(Math.abs(rows[1].disposal - 10 * scenario.mixed.fee) < 1e-8);
-  assert.ok(Math.abs(rows[0].disposal + rows[1].disposal - scenario.disposal) < 1e-8);
+  assert.ok(Math.abs(rows[0].disposal + rows[1].disposal - scenario.disposalComponents.processing) < 1e-8);
 });

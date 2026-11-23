@@ -17,10 +17,10 @@ test("한 반출 경로의 운반 총견적은 해당 공법과 경로에서만 
   const before = compare(inputs, p);
   const route = before.crush.transportResult.rows.find(row => row.kind === "mineral");
   const quoted = compare({ ...inputs, routeQuotes: { crush: { [route.key]: 0 } } }, p);
-  near(quoted.crush.transport, before.crush.transport - route.amount);
-  near(quoted.selective.transport, before.selective.transport);
+  near(quoted.crush.disposal, before.crush.disposal - route.amount);
+  near(quoted.selective.disposal, before.selective.disposal);
   const override = compare({ ...inputs, routeQuotes: { crush: { [route.key]: 0 } }, transportCrush: 250000 }, p);
-  near(override.crush.transport, 250000);
+  near(override.crush.disposalComponents.collection, 250000);
 });
 
 test("건축 기본은 양 공법 같은 건설폐재류 단가이며 순수 토목단가 이득이 없다", () => {
@@ -39,6 +39,45 @@ test("확인한 별도 반입견적만 해당 콘크리트 물량의 단가를 �
   const c = compare({ ...base, cleanCrush: 0, cleanSel: 25, cleanPrice: 30000 }, p);
   near(c.selective.disposal, 240 * (0.75 * p.fee_concrete + 0.25 * 30000));
   near(c.crush.disposal, 240 * p.fee_concrete);
+});
+
+test("논현동 선별 가정에서 건축 폐콘크리트 성상별 중량·처리단가·운반 차종을 연결한다", () => {
+  const q = { ...base, concreteCase: "building-sorted", t: { concrete: 100 }, transportCrush: undefined, transportSel: undefined };
+  const comparison = compare(q, p);
+  for (const [result, expected] of [[comparison.crush, [66, 26, 8]], [comparison.selective, [80, 18, 2]]]) {
+    const grades = concreteGrades(p, result.mode === "selective", q.concreteCase);
+    assert.deepEqual(grades.map(row => result.rows.find(item => item.item === row.name).qty), expected);
+    assert.deepEqual(grades.map(row => row.fee), [49571, 49571, 72721]);
+    const mixed = expected[2], mineral = 100 - mixed;
+    near(result.disposalComponents.processing, mineral * 49571 + mixed * 72721);
+    near(result.disposalComponents.collection, mineral * 20340 + mixed * 68300);
+    assert.equal(result.transportResult.rows.find(row => row.label.includes("가연물 5% 이하")).truck, "armroll24");
+    near(result.disposal, result.disposalComponents.processing + result.disposalComponents.collection);
+    near(result.transport, 0);
+    near(result.total, result.rows.reduce((sum, item) => sum + item.amount, 0));
+  }
+  near(comparison.crush.disposalComponents.processing - comparison.selective.disposalComponents.processing, 138900);
+  assert.ok(comparison.completeness.missing.some(row => row.code === "concrete-grades"));
+});
+
+test("운반 포함 일괄 처리견적이 처리·경로별 추정·운반견적을 한 번 대체하고 매각수익을 보존한다", () => {
+  const q = { ...base, concreteCase: "building-sorted", t: { concrete: 100, mixed: 2, panel: 1, metal: 3 },
+    transportCrush: 500000, transportSel: undefined };
+  const before = compare(q, p), quoted = compare({ ...q, disposalAllInCrush: 900000, disposalAllInSel: 0 }, p);
+  for (const [result, reference, expected] of [[quoted.crush, before.crush, 900000], [quoted.selective, before.selective, 0]]) {
+    assert.deepEqual(result.disposalComponents, { processing: null, collection: null, allInQuote: expected });
+    near(result.disposal, expected);
+    near(result.transport, 0);
+    near(result.revenue, reference.revenue);
+    near(result.total - reference.total, expected - reference.disposal);
+    assert.equal(result.transportResult.status, "bundled");
+    assert.deepEqual(result.unpricedDisposal, []);
+    assert.equal(result.rows.filter(row => row.group === "처리비").length, 1);
+  }
+  assert.ok(!quoted.completeness.missing.some(row => ["concrete-grades", "transport-route", "mixed-disposal-quote", "transport-estimate-conditions"].includes(row.code)));
+  const oneQuote = compare({ ...q, disposalAllInCrush: 0 }, p);
+  near(oneQuote.selective.disposal, before.selective.disposal);
+  near(oneQuote.crush.disposal, 0);
 });
 
 test("압쇄 표준편성의 보조장비와 작업조 누락을 알리고 견적을 실제 비용에 반영한다", () => {
@@ -108,11 +147,12 @@ test("자동 창호 모드도 현장 확인 공법별 회수율을 존중한다"
 test("운반비는 기본 공식표로 추정하고 한쪽 견적만 있어도 독립 적용한다", () => {
   const q = { ...base, transportCrush: undefined, transportSel: undefined };
   const c = compare(q, p);
-  assert.ok(c.crush.transport > 0);
+  assert.ok(c.crush.disposalComponents.collection > 0);
+  near(c.crush.transport, 0);
   assert.equal(c.crush.transportResult.benchmark, true);
   const partial = compare({ ...q, transportCrush: 123456 }, p);
-  near(partial.crush.transport, 123456);
-  near(partial.selective.transport, c.selective.transport);
+  near(partial.crush.disposalComponents.collection, 123456);
+  near(partial.selective.disposalComponents.collection, c.selective.disposalComponents.collection);
 });
 
 test("미확인 성상·재료·필수견적은 포함항목 금액을 유지하며 확정 추천을 막는다", () => {

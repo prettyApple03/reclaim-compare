@@ -1,4 +1,4 @@
-import { streamTons } from "./scenario.js?v=salvage-20261123";
+import { streamTons } from "./scenario.js?v=nonhyeon-compare-20261123";
 
 // Itemize revenue already deducted by the scenario. The underlying cost rows keep
 // their negative sign; this ledger presents gross proceeds as positive amounts.

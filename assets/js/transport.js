@@ -82,6 +82,11 @@ export function estimateTransport(options = {}) {
     // Distance-knot sensitivity only; this is not a confidence interval or a quote range.
     publishedDistanceSensitivity: { at30Km: publishedRangeMin, at60Km: publishedRangeMax },
   });
+  if (options.includedInDisposalQuote) {
+    routeTons = routes.reduce((sum, route) => sum + (nonnegative(route.tons) ? route.tons : 0), 0);
+    assumptions.push("현장 일괄 견적은 매각대금 차감 전 금액이며 폐기물 처리와 현장이 부담하는 모든 상차·운반을 포함합니다.");
+    return result("bundled", true);
+  }
   if (present(quote)) {
     if (!nonnegative(quote)) {
       unpriced.push({ key: "quote", item: "운반 견적", tons: null, reason: "0원 이상인 유한 금액을 입력하세요." });

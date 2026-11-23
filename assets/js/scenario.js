@@ -2,7 +2,7 @@
 // 물량 q = { area_m2, floors(지상 층수), concrete_m3, rebarFromConcrete, t: { concrete, metal, wood, resin, glass, board, mixed, copper, aluminum },
 //          site(대지 조건: SITES의 키), labor(분별 추가 품 계산: "paper" | "quantity") }
 // 단가 p = { 키: 숫자 } (rates.json의 params에서 value만 뽑은 것)
-import { estimateTransport } from "./transport.js?v=salvage-20261123";
+import { estimateTransport } from "./transport.js?v=nonhyeon-compare-20261123";
 
 export const STREAMS = ["concrete", "masonry", "metal", "wood", "resin", "glass", "tile", "board", "panel", "mixed", "copper", "aluminum"];
 export const STREAM_LABEL = {
@@ -118,6 +118,7 @@ export function streamTons(q, p) {
 export const DEFAULT_CONCRETE_CASE = "building";
 export const CONCRETE_CASES = {
   building: { label: "건축 폐재류 · 양 공법 동일", shares: [0, 1, 0] },
+  "building-sorted": { label: "건축 폐재류 · 공법별 선별 가정", shares: [0.80, 0.18, 0.02] },
   same: { label: "기존 성상 시나리오 · 양 공법 동일 (현장 확인 필요)", shares: [0.66, 0.26, 0.08], legacy: true },
   standard: { label: "기존 분별 중간 시나리오 (현장 확인 필요)", shares: [0.71, 0.26, 0.03], legacy: true },
   good: { label: "기존 분별 양호 시나리오 (현장 확인 필요)", shares: [0.80, 0.18, 0.02], legacy: true },
@@ -148,8 +149,9 @@ export function concreteGrades(p, selective, concreteCase = DEFAULT_CONCRETE_CAS
   const shares = link
     ? baseline.map((share, i) => share + (CONCRETE_CASES.good.shares[i] - share) * (link.factor ?? 0))
     : (selective ? CONCRETE_CASES[concreteCase]?.shares ?? baseline : baseline);
+  const buildingSorted = concreteCase === "building-sorted";
   return [
-    { name: "순수 폐콘크리트", share: shares[0], fee: p.fee_pure_concrete },
+    { name: buildingSorted ? "별도 선별한 건축 폐콘크리트" : "순수 폐콘크리트", share: shares[0], fee: buildingSorted ? p.fee_concrete : p.fee_pure_concrete },
     { name: "건설폐재류 (가연물 제거)", share: shares[1], fee: p.fee_concrete },
     { name: "건설폐재류 (가연물 5% 이하)", share: shares[2], fee: p.fee_mixed_mineral },
   ];
@@ -202,10 +204,12 @@ function recoveryQuote(q, mode) {
 
 export function costScenario(q, p, mode) {
   const sel = mode === "selective";
+  const allInInput = sel ? q.disposalAllInSel : q.disposalAllInCrush;
+  const allInQuote = Number.isFinite(allInInput) && allInInput >= 0 ? allInInput : null;
   // IFC 모델에는 철근이 없으므로 콘크리트 부피에서 추정하고, 그만큼 폐콘크리트 톤수에서 뺀다
   const { t, rebar } = streamTons(q, p);
   const metal = t.metal;
-  const rows = [];
+  let rows = [];
   const add = (group, item, qty, unit, price, sign = 1) => {
     const amount = sign * qty * price;
     rows.push({ group, item, qty, unit, price, amount });
@@ -216,7 +220,7 @@ export function costScenario(q, p, mode) {
   const issues = [];
   const unpricedCosts = [];
   const unpricedDisposal = q.panelWeightMissing ? [{ item: "폐샌드위치패널 중량 미확인", tons: null }] : [];
-  if (q.panelWeightMissing) issues.push("폐샌드위치패널이 감지되었습니다. 별도 처리비에 반영할 중량을 입력하세요.");
+  if (q.panelWeightMissing && allInQuote == null) issues.push("폐샌드위치패널이 감지되었습니다. 별도 처리비에 반영할 중량을 입력하세요.");
   if (q.structure === "other") issues.push("기타·복합 구조에 RC 공기와 장비식을 적용한 비교값입니다.");
   // 1. 인건비 — 공종별 일수 × 작업조 × 노임 (두 안 공통). 일수는 schedule()의 공기 규칙을 쓴다.
   const sched = schedule(q, p, mode), days = sched.total, crew = crews(q, p);
@@ -294,9 +298,9 @@ export function costScenario(q, p, mode) {
   if (mixedQuote != null && mixedQuote >= 0) Object.assign(mix, { fee: mixedQuote, needsQuote: false, quoted: true, rule: "현장 혼합잔재 반입 견적" });
   const specified = t.concrete * (sel ? q.cleanSel ?? 0 : q.cleanCrush ?? 0) / 100;
   const quoted = q.cleanPrice == null ? 0 : specified;
-  if (specified && !quoted) issues.push("콘크리트 별도 반입 견적이 없어 공법별 성상 비율을 적용했습니다.");
+  if (allInQuote == null && specified && !quoted) issues.push("콘크리트 별도 반입 견적이 없어 공법별 성상 비율을 적용했습니다.");
   let disposal = add("처리비", "혼합건설폐기물", mix.tons, "t", mix.fee);
-  if ((q.concreteCase ?? DEFAULT_CONCRETE_CASE) === "building" && (t.concrete - quoted > 1e-9 || t.masonry > 1e-9) && !q.concreteIntakeConfirmed) {
+  if (allInQuote == null && (q.concreteCase ?? DEFAULT_CONCRETE_CASE) === "building" && (t.concrete - quoted > 1e-9 || t.masonry > 1e-9) && !q.concreteIntakeConfirmed) {
     unpricedCosts.push({ code: "building-intake-condition", item: "건축 폐재류 반입조건", reason: "49,571원/t는 건설폐재류의 가연물 제거 반입조건을 전제로 한 공표 참고값입니다. 현장 성상과 처리장 인수조건을 확인하거나 해당 물량의 반입견적을 입력하세요." });
   }
   const finishCarryover = (finishRoutes?.board.concreteCarryover ?? 0) + (finishRoutes?.tile.concreteCarryover ?? 0);
@@ -304,7 +308,7 @@ export function costScenario(q, p, mode) {
   if (windowGlass) {
     const glassMixedQuote = mixedQuote ?? (p.fee_mixed_quote >= 0 ? p.fee_mixed_quote : null);
     disposal += add("처리비", "혼합 반출 창호 유리", windowGlass, "t", glassMixedQuote ?? p.fee_mixed_unverified);
-    if (glassMixedQuote == null) unpricedCosts.push({ code: "window-glass-quote", item: "창호 유리 혼합 반입", reason: "공법별 혼합 처리 견적이 없어 비교용 단가를 적용했습니다." });
+    if (allInQuote == null && glassMixedQuote == null) unpricedCosts.push({ code: "window-glass-quote", item: "창호 유리 혼합 반입", reason: "공법별 혼합 처리 견적이 없어 비교용 단가를 적용했습니다." });
   }
   for (const grade of concreteGrades(p, sel, q.concreteCase, q)) {
     disposal += add("처리비", grade.name, (t.concrete - quoted) * grade.share, "t", grade.fee);
@@ -315,7 +319,7 @@ export function costScenario(q, p, mode) {
     if (p.fee_panel >= 0) disposal += add("처리비", STREAM_LABEL.panel, t.panel, "t", p.fee_panel);
     else unpricedDisposal.push({ item: STREAM_LABEL.panel, tons: t.panel });
   }
-  if (mix.needsQuote) {
+  if (allInQuote == null && mix.needsQuote) {
     issues.push("혼합잔재에 프로젝트 기본 처리단가를 적용했습니다. 공표 반입조건을 충족하는 현장 견적이 아닙니다.");
     unpricedCosts.push({ code: "mixed-disposal-quote", item: "혼합잔재 반입 견적", reason: mix.rule + ": 가연물 5% 이하 공표 단가의 적용조건을 벗어나거나 성상이 미확인입니다. 현재 금액은 비교용 가정입니다." });
   }
@@ -391,7 +395,7 @@ export function costScenario(q, p, mode) {
 
   for (const [key, net] of [["wood", q.woodNetPrice ?? p.net_wood], ["resin", q.resinNetPrice ?? p.net_resin]]) {
     const weight = key === "resin" ? split.resin - pvcRecovered : split[key];
-    if (weight > 0 && q[key === "wood" ? "woodNetPrice" : "resinNetPrice"] == null && !q.separatedPricesConfirmed) {
+    if (weight > 0 && (allInQuote == null || net >= 0) && q[key === "wood" ? "woodNetPrice" : "resinNetPrice"] == null && !q.separatedPricesConfirmed) {
       unpricedCosts.push({ code: `separated-${key}-price`, item: `분리 ${STREAM_LABEL[key]} 인수조건`, reason: "프로젝트 참고 순단가를 적용했습니다. 현장 매각/처리 견적을 입력하세요. 0원은 무상 인수가 확인된 경우입니다." });
     }
     if (net >= 0) revenue -= add("매각수익", STREAM_LABEL[key], weight, "t", net, -1);
@@ -404,21 +408,32 @@ export function costScenario(q, p, mode) {
     else unpricedDisposal.push({ item: `분리 ${STREAM_LABEL[key]}`, tons: weight });
   }
 
-  const transportQuote = sel ? q.transportSel : q.transportCrush;
+  const transportQuote = allInQuote == null ? (sel ? q.transportSel : q.transportCrush) : null;
   // Transport follows the actual disposal/salvage routes, including unpriced disposal stocks.
   const routes = rows.filter(row => ["처리비", "매각수익"].includes(row.group) && row.qty > 0 && ["t", "kg"].includes(row.unit)).map(row => ({
     key: `${row.group}/${row.item}`, label: row.item, stream: row.item,
     tons: row.unit === "kg" ? row.qty / 1000 : row.qty,
     destination: row.group === "매각수익" ? "salvage" : "disposal",
-    kind: /콘크리트|폐벽돌|조적|건설폐재류/.test(row.item) ? "mineral" : /혼합/.test(row.item) ? "mixed" : "separated",
+    kind: /가연물 5% 이하|혼합/.test(row.item) ? "mixed" : /콘크리트|폐벽돌|조적|건설폐재류/.test(row.item) ? "mineral" : "separated",
   }));
   for (const item of unpricedDisposal) if (item.tons > 0) routes.push({ key: `처리비/${item.item}`, label: item.item, stream: item.item, tons: item.tons, destination: "disposal", kind: "separated" });
   const routeQuotes = q.routeQuotes?.[mode];
   if (routeQuotes) for (const route of routes) {
     if (Object.hasOwn(routeQuotes, route.key)) route.quote = routeQuotes[route.key];
   }
-  const transportResult = estimateTransport({ ...(q.transport ?? {}), routes, quote: transportQuote });
-  const transport = add("운반비", transportResult.status === "quote" ? "현장 수집·운반 견적" : "현장 수집·운반 (노선별 추정)", 1, "식", transportResult.total);
+  const transportResult = estimateTransport({ ...(q.transport ?? {}), routes, quote: transportQuote, includedInDisposalQuote: allInQuote != null });
+  const disposalComponents = { processing: null, collection: null, allInQuote };
+  if (allInQuote != null) {
+    rows = rows.filter(row => row.group !== "처리비");
+    unpricedDisposal.length = 0;
+    disposal = add("처리비", "현장 처리·상차·운반 일괄 견적", 1, "식", allInQuote);
+  } else {
+    disposalComponents.processing = disposal;
+    disposalComponents.collection = transportResult.total;
+    if (transportResult.total > 0) {
+      disposal += add("처리비", transportResult.status === "quote" ? "처리비에 포함한 수집·운반 견적" : "처리비에 포함한 수집·운반 (경로별 산정)", 1, "식", transportResult.total);
+    }
+  }
   issues.push(...transportResult.issues);
   unpricedCosts.push(...transportResult.unpriced.map(item => ({ code: "transport-route", item: item.label ?? item.item ?? "운반 경로", reason: item.reason ?? "현장 운반견적을 확인하세요." })));
   const transportConditions = transportResult.rows.filter(row => row.kind !== "quote" && row.kind !== "pickup").flatMap(row => [
@@ -432,7 +447,7 @@ export function costScenario(q, p, mode) {
   // 5. 간접비
   const indirect = add("간접비", "현장 간접비", days, "일", p.indirect_per_day);
 
-  return { mode, labor, equipment, disposal, transport, transportQuote, transportResult, potentialRevenue, recoveryCost, copperSales, revenue, indirect, days, unpricedDisposal, unpricedCosts, equipmentNorm: norm, equipmentCrewDays, excavatorHours, schedule: sched, crews: crew, mixed: mix, finishRoutes, split, sold, embeddedRebar, concreteIntake: t.concrete + embeddedRebar + finishCarryover, unsoldMetal, issues, total: labor + equipment + disposal + transport + indirect - revenue, rows: rows.filter((r) => r.qty > 0) };
+  return { mode, labor, equipment, disposal, disposalComponents, transport: 0, transportQuote, transportResult, potentialRevenue, recoveryCost, copperSales, revenue, indirect, days, unpricedDisposal, unpricedCosts, equipmentNorm: norm, equipmentCrewDays, excavatorHours, schedule: sched, crews: crew, mixed: mix, finishRoutes, split, sold, embeddedRebar, concreteIntake: t.concrete + embeddedRebar + finishCarryover, unsoldMetal, issues, total: labor + equipment + disposal + indirect - revenue, rows: rows.filter((r) => r.qty > 0) };
 }
 
 function finishSeparations(q, t, p, selective) {
@@ -529,7 +544,20 @@ function commonFinishPd(q, p) {
 
 export function selExtra(q, p) {
   const A = q.area_m2;
-  if (q.labor !== "quantity") {
+  if (Number.isFinite(q.selectiveExtraPd) && q.selectiveExtraPd >= 0) {
+    const persons = q.selectiveExtraPd;
+    const carpenter = persons * Math.min(100, Math.max(0, q.carpenterShare ?? 0)) / 100;
+    return { method: "field", persons, rows: [
+      { item: "현장 입력 분별 추가 보통인부", qty: persons - carpenter, wage: "laborer" },
+      { item: "현장 입력 분별 추가 목공", qty: carpenter, wage: "carpenter" },
+    ], issues: [] };
+  }
+  // Only extend the selective operation. A labor comparison cannot establish the
+  // mass of omitted materials or modify labor already booked in the base schedule.
+  const referenceFallback = q.selectiveLaborReference === "park-2023" && q.labor === "quantity"
+    && q.finishQuantityMode === "auto" && q.generalFinishPd == null
+    && q.finishTakeoff?.board?.unverified === true && q.finishTakeoff?.tile?.unverified === true;
+  if (q.labor !== "quantity" || referenceFallback) {
     const baseCarpenter = A * p.sel_extra_carpenter;
     const baseLaborer = A * p.sel_extra_laborer;
     const total = baseCarpenter + baseLaborer;
@@ -539,8 +567,9 @@ export function selExtra(q, p) {
       { item: "분별 추가 목공", qty: baseCarpenter * remaining, wage: "carpenter" },
       { item: "분별 추가 보통인부", qty: baseLaborer * remaining, wage: "laborer" },
     ];
-    return { method: "paper", commonWindow, rows, persons: rows[0].qty + rows[1].qty,
-      issues: ["표 3·4 차이 품의 현장 적용 및 천장 모르타르·바닥 타일 기재 의도는 확인이 필요합니다."] };
+    const issues = ["표 3·4 차이 품의 현장 적용 및 천장 모르타르·바닥 타일 기재 의도는 확인이 필요합니다."];
+    if (referenceFallback) issues.push("보드·타일 조사 물량이 없어 박지선 외(2023)의 5층 공동주택 2,400㎡ 비교 사례에서 산정한 추가 노무량을 해체 대상 면적에 적용했습니다. 현장 공수 입력으로 대체할 수 있습니다.");
+    return { method: "paper", referenceFallback, commonWindow, rows, persons: rows[0].qty + rows[1].qty, issues };
   }
 
   const areas = q.finishAreas ?? {};
@@ -630,7 +659,7 @@ export function unbenefitedFinishLabor(q, p) {
 export function compare(q, p) {
   const crush = costScenario(q, p, "crush"), selective = costScenario(q, p, "selective");
   const unpricedCuts = ["crush", "selective"].filter(mode => concreteCut(q, mode).quoteMissing);
-  const partialTransport = (crush.transportQuote == null) !== (selective.transportQuote == null);
+  const partialTransport = (crush.transportQuote == null && crush.disposalComponents.allInQuote == null) !== (selective.transportQuote == null && selective.disposalComponents.allInQuote == null);
   const hasUnpricedDisposal = crush.unpricedDisposal.length > 0 || selective.unpricedDisposal.length > 0;
   const missing = [...crush.unpricedCosts, ...selective.unpricedCosts];
   for (const [mode, result] of [["crush", crush], ["selective", selective]]) {
@@ -638,7 +667,11 @@ export function compare(q, p) {
   }
   if (steelDismantling(q).excluded) missing.push({ code: "steel-dismantling", item: "철골 절단·인양", reason: "양 공법의 절단·인양 도급비가 확인되지 않았습니다." });
   for (const mode of unpricedCuts) missing.push({ code: "concrete-cut", item: "콘크리트 절단·인양", mode, reason: "작업량·공기는 반영했으나 도급비가 합계에서 빠졌습니다." });
-  if (q.concreteCase && q.concreteCase !== "building" && !q.concreteGradesConfirmed) missing.push({ code: "concrete-grades", item: "콘크리트 반입 성상", reason: "기존 66/26/8 등 성상비율과 순수 콘크리트 단가는 명시적 비교 가정입니다. 현장 반입조건·견적을 확인하세요." });
+  const usesGradeRates = (q.t?.concrete ?? 0) > 0 && [crush, selective].some(result =>
+    result.disposalComponents.allInQuote == null && (q.cleanPrice == null || (result.mode === "crush" ? q.cleanCrush : q.cleanSel) !== 100));
+  if (q.concreteCase && q.concreteCase !== "building" && usesGradeRates && !q.concreteGradesConfirmed) missing.push({ code: "concrete-grades", item: "콘크리트 반입 성상", reason: q.concreteCase === "building-sorted"
+    ? "압쇄 66/26/8%, 분별 80/18/2%는 프로젝트의 건축 폐재류 분리 가정입니다. 처리장 계근표·성상검사 또는 현장 일괄 견적으로 확인하세요."
+    : "기존 66/26/8 등 성상비율과 순수 콘크리트 단가는 비교 가정입니다. 현장 반입조건·견적을 확인하세요." });
   const unknownVolume = q.unresolvedMaterialVolume_m3 ?? 0;
   if (unknownVolume > 1e-9) missing.push({ code: "quantity-material", item: "미확인 재료 물량", reason: `${unknownVolume.toFixed(3)}㎥의 재료·밀도·실체적이 미확인입니다.` });
   const finishes = Object.entries(q.finishTakeoff ?? {});

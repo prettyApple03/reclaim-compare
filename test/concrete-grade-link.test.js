@@ -37,7 +37,7 @@ test("finish routes conserve mass and charge each tonne once", () => {
     const split = result.finishRoutes.board.separate + result.finishRoutes.tile.separate;
     const carryover = result.finishRoutes.board.concreteCarryover + result.finishRoutes.tile.concreteCarryover;
     assert.ok(Math.abs(total - result.mixed.tons - split - carryover) < 1e-9);
-    const billed = result.rows.filter(row => row.group === "처리비").reduce((sum, row) => sum + row.qty, 0);
+    const billed = result.rows.filter(row => row.group === "처리비" && row.unit === "t").reduce((sum, row) => sum + row.qty, 0);
     assert.ok(Math.abs(billed - model.t.concrete - total) < 1e-9);
   }
 });

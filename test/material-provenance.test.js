@@ -185,7 +185,7 @@ test("현장 순단가·공법별 혼합견적과 창틀 회수율은 부재표�
   for (const mode of ["crush", "selective"]) {
     const scenario = costScenario(q, params, mode);
     const rows = elementResults(classified, params, scenario.mixed.fee, q, mode, scenario);
-    near(rows.reduce((sum, row) => sum + row.disposal, 0), scenario.disposal);
+    near(rows.reduce((sum, row) => sum + row.disposal, 0), scenario.disposalComponents.processing);
     near(rows.reduce((sum, row) => sum + row.revenue, 0), scenario.revenue);
   }
 });
