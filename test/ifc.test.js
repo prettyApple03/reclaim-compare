@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ifcBuildingUse, ifcServiceKind, ifcServiceMass, lengthScale, openingArea } from "../assets/js/ifc.js";
+import { ifcAboveGroundHeight, ifcBuildingUse, ifcServiceKind, ifcServiceMass, lengthScale, openingArea } from "../assets/js/ifc.js";
 
 // web-ifc가 GetLine(..., true)로 펼친 IfcUnitAssignment.Units와 같은 모양
 const si = (prefix) => ({ UnitType: { value: "LENGTHUNIT" }, Prefix: prefix ? { value: prefix } : null, Name: { value: "METRE" } });
@@ -25,6 +25,25 @@ test("IFC 용도와 면적 추정 적용 범위를 모델 안의 정보로 판�
   assert.deepEqual(ifcBuildingUse("Building", "", "공장"), { usage: "비주거 RC", serviceAreaExcluded: true });
   assert.deepEqual(ifcBuildingUse("단독주택 및 축사", "", ""), { usage: "단독주택", serviceAreaExcluded: true });
   assert.deepEqual(ifcBuildingUse("Building", "Sample Apartment", ""), { usage: "공동주택", serviceAreaExcluded: false });
+});
+
+test("IFC 지상 높이는 지상 기준과 연결된 구조부재만 쓰고 지하·기초 형상은 뺀다", () => {
+  const elements = [
+    { expressID: 1, category: "wall" },
+    { expressID: 2, category: "roof" },
+    { expressID: 3, category: "wall" },
+    { expressID: 4, category: "footing" },
+    { expressID: 5, category: "roof" },
+    { expressID: 6, category: "slab", basementCap: true },
+  ];
+  const storeys = [{ basement: true }, { ground: true }, { roof: true }];
+  const floor = new Map([[1, 2], [2, 3], [3, 1], [4, 2], [6, 2]]);
+  const tops = new Map([[1, 201], [2, 210.00000001], [3, 250], [4, 260], [5, 270], [6, 202]]);
+  const height = (ground, parts = elements) => ifcAboveGroundHeight(ground, parts, storeys, id => floor.get(id), tops);
+  assert.equal(height(200), 10);
+  assert.equal(height(null), null);
+  assert.equal(height(200, elements.slice(2)), null);
+  assert.equal(height(220), null);
 });
 
 test("동관과 피복전선은 설비 종류와 재료 근거가 맞을 때 구분한다", () => {

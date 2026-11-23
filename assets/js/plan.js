@@ -121,7 +121,7 @@ export function planToIfc(plan, opts) {
 
 // 계획서의 현장·장비 조건 → 모델 입력값. 명시한 값을 우선하고, 없으면 해체공법 문구로 탑재 여부를 추정한다.
 // demolition: { site: "wide"|"normal"|"tight"|"restricted", equipment: "large"|"small"|"mounted",
-//               crane_days: 숫자, ground_floors: 지상 장비가 해체하는 하부 층수 }
+//               crane_days: 숫자, ground_floors: 지상 장비가 해체하는 하부 층수, basement_cap_owner: "above"|"below" }
 export function planConditions(plan, { sites = {}, equipments = {} } = {}) {
   const d = plan?.demolition || {}, out = {}, notes = [];
   const number = (x) => Number.isFinite(x) && x >= 0 ? x : undefined;
@@ -137,6 +137,10 @@ export function planConditions(plan, { sites = {}, equipments = {} } = {}) {
   else if (/^전체|^전부/.test(scope)) out.scope = "full";
   else if (/일부|부분/.test(scope)) out.scope = "partial";
   if (out.scope || out.structure) notes.push("계획서 구조형식·해체 범위 반영");
+  if (["above", "below"].includes(d.basement_cap_owner)) {
+    out.basementCapOwner = d.basement_cap_owner;
+    notes.push("경계 슬래브·지붕의 귀속 범위(계획서 데이터)");
+  }
   const method = d.method || "";
   const explicit = Object.hasOwn(equipments, d.equipment) && d.equipment !== "auto";
   if (explicit && (d.equipment !== "mounted" || /탑재/.test(method))) { out.equipment = d.equipment; notes.push("장비 방식(계획서 데이터)"); }

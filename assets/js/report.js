@@ -55,6 +55,30 @@ function titleBlock({ number, heading, source, url, logo, stamp }) {
 
 const methodLabel = { selective: "전면 분별", crush: "일괄 압쇄", tie: "동일" };
 
+export function scheduleBasisLabel(schedule) {
+  return ({ input: "입력 공정표", "crush-reference": "압쇄 공정표에서 추정", estimate: "기본 산식" })[schedule.sources?.total] ?? "기본 산식";
+}
+
+export function steelScheduleBasis(comparison) {
+  const modes = [["crush", "압쇄"], ["selective", "분별"]];
+  const durationByMode = Object.fromEntries(modes.map(([mode]) => {
+    const { schedule } = comparison[mode];
+    const source = schedule.sources.total;
+    const structureSource = schedule.sources.structure;
+    const durationExcluded = source === "estimate" && structureSource === "estimate" ? true : null;
+    const structureLabels = { input: " · 입력 구조체 작업일 적용", "crush-reference": " · 압쇄 구조체 작업일 참조" };
+    const structureBasis = source === "estimate" ? structureLabels[structureSource] ?? "" : "";
+    const status = durationExcluded ? "철골 공기 미반영" : "철골 공기 포함 여부 확인 필요";
+    return [mode, { source, structure_source: structureSource, duration_excluded: durationExcluded,
+      label: `${scheduleBasisLabel(schedule)}${structureBasis} · ${status}` }];
+  }));
+  return {
+    duration_by_mode: durationByMode,
+    duration_excluded: modes.some(([mode]) => durationByMode[mode].duration_excluded === true) ? true : null,
+    duration_label: modes.map(([mode, name]) => `${name} ${durationByMode[mode].label}`).join(" / "),
+  };
+}
+
 function comparisonReview(summary) {
   if (Array.isArray(summary.comparison_review)) return summary.comparison_review;
   const review = [];
@@ -93,6 +117,7 @@ function rc01(ctx) {
           </tbody></table>
           ${s.comparison_scope ? `<p class="rp-note"><strong>해체 범위</strong> · ${esc(s.comparison_scope)}</p>` : ""}
           ${s.schedule_basis?.label ? `<p class="rp-note"><strong>공기 근거</strong> · ${esc(s.schedule_basis.label)}</p>` : ""}
+          ${s.steel_dismantling?.duration_label ? `<p class="rp-note"><strong>철골 절단·인양 공기</strong> · ${esc(s.steel_dismantling.duration_label)}</p>` : ""}
           ${review.length ? `<p class="rp-note"><strong>판정에 필요한 확인 사항</strong></p>
             <ul class="rp-review">${review.map(item => `<li>${esc(item)}</li>`).join("")}</ul>`
             : conditional ? '<p class="rp-note">표시된 비용은 입력 조건으로 비교한 소계입니다.</p>' : ""}

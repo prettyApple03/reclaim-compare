@@ -110,11 +110,16 @@ export function grossArea(elements, size, floors) {
   return area > 0 ? { area, basis: "slab" } : { area: size[0] * size[2] * floors, basis: "bbox" };
 }
 
-export function ifcScopeElements(elements, scope, { includeBasementCap = true, includeFoundation = true } = {}) {
-  if (scope === "above") return elements.filter(el => !el.basement && el.category !== "footing");
-  if (scope !== "below") return elements;
-  return elements.filter(el => el.category === "footing" ? includeFoundation
-    : el.basement || (includeBasementCap && el.basementCap));
+export function ifcScopeElements(elements, scope, {
+  includeFoundation = true, includeBasementCap, basementCapOwner = includeBasementCap === false ? "above" : "below",
+} = {}) {
+  if (scope !== "above" && scope !== "below") return elements;
+  const owner = basementCapOwner === "above" ? "above" : "below";
+  return elements.filter(el => {
+    if (el.category === "footing") return scope === "below" && includeFoundation;
+    if (el.basementCap) return scope === owner;
+    return scope === (el.basement ? "below" : "above");
+  });
 }
 
 function scopeGeometry(elements, size, storeys) {
@@ -406,6 +411,41 @@ export function ifcBuildingUse(building, project, survey) {
   return { usage, serviceAreaExcluded };
 }
 
+const HEIGHT_COMPONENTS = new Set(["wall", "slab", "beam", "column", "roof", "plate"]);
+
+export function ifcAboveGroundHeight(groundY, elements, storeys, floorOf, topById) {
+  if (!Number.isFinite(groundY)) return null;
+  let topY = -Infinity;
+  for (const el of elements) {
+    if (el.basementCap || !HEIGHT_COMPONENTS.has(el.category)) continue;
+    const storey = storeys[(floorOf(el.expressID) ?? 0) - 1];
+    const meshTop = topById.get(el.expressID);
+    if (storey && !storey.basement && Number.isFinite(meshTop)) {
+      topY = Math.max(topY, meshTop);
+    }
+  }
+  const height = Math.round((topY - groundY) * 1000) / 1000;
+  return positive(height) ? height : null;
+}
+
+function groundLevelY(api, model, W, storeys, scale) {
+  const grade = /^(?:G\.?\s*L\.?|ground\s+level|grade(?:\s+level)?|지표면|지반(?:고|면)?)$/i;
+  const surveyLevels = storeys.filter(storey => grade.test(storey.name));
+  const grounds = surveyLevels.length ? surveyLevels : storeys.filter(storey => !storey.basement
+    && (storey.ground || /^(?:지상\s*)?1\s*층(?=$|\s|\(|\[)/.test(storey.name)));
+  if (grounds.length !== 1 || !positive(scale)) return null;
+  const placement = grounds[0].placement;
+  if (placement == null || api.GetLineType(model, placement) !== W.IFCLOCALPLACEMENT) return null;
+  try {
+    // Object placements use IFC Z-up and file units. The streamed geometry uses Y-up metres.
+    const matrix = api.GetWorldTransformMatrix(model, placement);
+    if (!(Math.abs(matrix[10] - 1) < 1e-9) || matrix[15] !== 1 || !Number.isFinite(matrix[14])) return null;
+    return matrix[14] * scale;
+  } catch {
+    return null;
+  }
+}
+
 export async function parseIfc(buffer) {
   const W = await import(CDN + "web-ifc-api.js");
   const api = new W.IfcAPI();
@@ -492,7 +532,7 @@ export async function parseIfc(buffer) {
         const level = api.GetLine(model, id);
         const name = String(level.Name?.value ?? "").trim();
         const elev = Number(level.Elevation?.value ?? 0);
-        return { id, name, elev, elevation_m: elev * scale,
+        return { id, name, elev, elevation_m: elev * scale, placement: level.ObjectPlacement?.value,
           basement: /^(?:(?:level|floor|fl)\s*)?(?:B\s*\d+|지하|Basement|Underground)/i.test(name),
           ground: /^(?:G(?:round\s*(?:floor)?)?F?|(?:지상\s*)?1\s*층|[01]\s*F|(?:level|floor|l)[\s_-]*[01])(?:\b|$)/i.test(name),
           roof: /^(?:RF\b|PH\b|Roof|옥상|옥탑|지붕)/i.test(name) };
@@ -514,7 +554,9 @@ export async function parseIfc(buffer) {
     }
     // 형상: 배치 행렬을 적용한 월드 좌표 (web-ifc 출력은 Y-up, m 단위)
     const meshes = [];
+    const topById = new Map();
     api.StreamAllMeshes(model, (flat) => {
+      let top = -Infinity;
       for (let i = 0; i < flat.geometries.size(); i++) {
         const pg = flat.geometries.get(i);
         const g = api.GetGeometry(model, pg.geometryExpressID);
@@ -527,7 +569,9 @@ export async function parseIfc(buffer) {
         for (let k = 0; k < n; k++) {
           const [x, y, z, nx, ny, nz] = vd.subarray(k * 6, k * 6 + 6);
           positions[k * 3] = m[0] * x + m[4] * y + m[8] * z + m[12];
-          positions[k * 3 + 1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+          const worldY = m[1] * x + m[5] * y + m[9] * z + m[13];
+          positions[k * 3 + 1] = worldY;
+          if (Number.isFinite(worldY)) top = Math.max(top, worldY);
           positions[k * 3 + 2] = m[2] * x + m[6] * y + m[10] * z + m[14];
           normals[k * 3] = m[0] * nx + m[4] * ny + m[8] * nz;
           normals[k * 3 + 1] = m[1] * nx + m[5] * ny + m[9] * nz;
@@ -535,6 +579,7 @@ export async function parseIfc(buffer) {
         }
         meshes.push({ expressID: flat.expressID, positions, normals, index });
       }
+      if (Number.isFinite(top)) topById.set(flat.expressID, top);
     });
     if (!meshes.length) throw new Error("IFC에 형상이 없습니다.");
 
@@ -627,7 +672,19 @@ export async function parseIfc(buffer) {
     }
     const buildingUse = ifcBuildingUse(describe(W.IFCBUILDING), describe(W.IFCPROJECT), survey);
     const services = ifcServices({ types: W, read, ids, typeOf, serviceTypes, serviceData, unitDefaults, parentOf, matOf, floorOf, storeys });
+    const heightFloorOf = id => {
+      if (floorOf.has(id)) return floorOf.get(id);
+      const seen = new Set();
+      while (id != null && !seen.has(id)) {
+        if (floorOf.has(id)) return floorOf.get(id);
+        seen.add(id);
+        id = parentOf.get(id);
+      }
+    };
+    const groundY = groundLevelY(api, model, W, storeys, unitDefaults.length);
+    const aboveHeight_m = ifcAboveGroundHeight(groundY, elements, storeys, heightFloorOf, topById);
     return { meshes, elements, services, size, floors, ...scopeGeometry(elements, size, storeys), ...buildingUse, lengthScale: scale, gross: grossArea(elements, size, floors),
+      aboveHeight_m, aboveHeightBasis: aboveHeight_m == null ? null : "ifc-geometry",
       volumeCheck: volumeCheck(elements) };
   } finally {
     api.CloseModel(model);

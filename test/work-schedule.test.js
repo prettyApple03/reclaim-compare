@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { ifcScopeElements } from "../assets/js/ifc.js";
+import { reportHtml, steelScheduleBasis } from "../assets/js/report.js";
 import { compare, paramValues, workScheduleIssues } from "../assets/js/scenario.js";
 
 const p = paramValues(JSON.parse(readFileSync(new URL("../assets/data/rates.json", import.meta.url))));
@@ -10,6 +11,35 @@ const q = {
   concrete_m3: 500, t: { concrete: 1200 }, finishAreas: { board: 1500, tile: 0 },
   finishBaseline: { board: 0.6, tile: 1 }, windowMode: "both", windowArea: 0,
 };
+
+test("철골 기간의 공법별 공정표 출처와 포함 확인 상태를 보고서에도 공유한다", () => {
+  const steel = { ...q, steelWork: true };
+  const defaultTiming = steelScheduleBasis(compare(steel, p));
+  assert.equal(defaultTiming.duration_by_mode.crush.duration_excluded, true);
+  assert.equal(defaultTiming.duration_by_mode.selective.duration_excluded, true);
+
+  const withCrush = { ...steel, workSchedule: { crush: { totalDays: 22 } } };
+  const referenced = steelScheduleBasis(compare(withCrush, p));
+  assert.equal(referenced.duration_by_mode.crush.source, "input");
+  assert.equal(referenced.duration_by_mode.selective.source, "crush-reference");
+  assert.equal(referenced.duration_by_mode.selective.duration_excluded, null);
+
+  const partlyEntered = { ...steel, workSchedule: { crush: { structureDays: 11 } } };
+  const structureTiming = steelScheduleBasis(compare(partlyEntered, p));
+  assert.match(structureTiming.duration_by_mode.crush.label, /입력 구조체 작업일 적용/);
+  assert.equal(structureTiming.duration_by_mode.crush.duration_excluded, null);
+
+  const entered = { ...withCrush, workSchedule: { ...withCrush.workSchedule, selective: { totalDays: 25 } } };
+  const result = compare(entered, p);
+  assert.equal(result.crush.days, 22);
+  assert.equal(result.selective.days, 25);
+  const both = steelScheduleBasis(result);
+  assert.equal(both.duration_excluded, null);
+  assert.equal(both.duration_by_mode.selective.source, "input");
+  const html = reportHtml({ summary: { steel_dismantling: both }, elements: [] });
+  assert.ok(html.includes(both.duration_label));
+  assert.doesNotMatch(html, /철골 공기 미반영/);
+});
 
 test("계획서 전체·구조체 일수는 작업일에 적용하며 굴착기 가동시간과 따로 처리한다", () => {
   const defaults = compare(q, p);
@@ -51,14 +81,21 @@ test("일정 합계에서 공종 병행을 허용하고 개별 입력이 전체 
   assert.match(workScheduleIssues({ ...input, workSchedule: { crush: { totalDays: 5, structureDays: 8 } } })[0], /초과/);
 });
 
-test("선택 범위에서 지하 최상부 경계 슬래브와 기초를 조정한다", () => {
+test("지상·지하 범위는 경계 슬래브를 한쪽에만 집계한다", () => {
   const floor = { category: "slab" };
   const cap = { category: "roof", basementCap: true };
   const footing = { category: "footing" };
   const basementWall = { category: "wall", basement: true };
   const elements = [floor, cap, footing, basementWall];
-  assert.deepEqual(ifcScopeElements(elements, "above"), [floor, cap]);
+  assert.deepEqual(ifcScopeElements(elements, "above"), [floor]);
   assert.deepEqual(ifcScopeElements(elements, "below"), [cap, footing, basementWall]);
-  assert.deepEqual(ifcScopeElements(elements, "below", { includeBasementCap: false, includeFoundation: false }), [basementWall]);
+  const aboveOwner = { basementCapOwner: "above" };
+  assert.deepEqual(ifcScopeElements(elements, "above", aboveOwner), [floor, cap]);
+  assert.deepEqual(ifcScopeElements(elements, "below", aboveOwner), [footing, basementWall]);
+  const noFoundation = { includeBasementCap: false, includeFoundation: false };
+  assert.deepEqual(ifcScopeElements(elements, "above", noFoundation), [floor, cap]);
+  assert.deepEqual(ifcScopeElements(elements, "below", noFoundation), [basementWall]);
+  assert.deepEqual(ifcScopeElements(elements, "below", { ...noFoundation, basementCapOwner: "below" }), [cap, basementWall]);
+  assert.equal(ifcScopeElements(elements, "full"), elements);
   assert.equal(ifcScopeElements(elements, "partial"), elements);
 });

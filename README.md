@@ -48,9 +48,11 @@ node --test
 
 ### IFC의 해체 범위와 공정표
 
-모델 탭의 현장 조건에서 지상부·지하부·전체·부분해체를 선택합니다. 부분해체에는 대상 부재 IFC를 사용합니다. 지하부를 선택하면 식별된 지하층을 집계하고 지하 최상부 덮개와 기초의 포함 여부를 조정할 수 있습니다. 공법별 전체 작업일과 공종별 작업일 기준을 입력해, 구조체 굴착기 가동시간·장비비와 별도로 산정합니다.
+모델 탭의 현장 조건에서 지상부·지하부·전체·부분해체를 선택합니다. 부분해체에는 대상 부재 IFC를 사용합니다. 지상·지하를 나눠 집계할 때 경계 슬래브·지붕 후보는 기본적으로 지하부에 귀속합니다. 계획서나 모델 탭에서 귀속 범위를 지정할 수 있고, 지하부의 기초 포함 여부도 조정할 수 있습니다. 전체 프로젝트의 비용은 공통 가설비와 간접비를 고려해 전체 범위에서 비교합니다.
 
-임의의 IFC에도 `reclaim-plan/1` JSON을 연결할 수 있습니다. `building.demolition_area_m2`에는 해당 범위 면적을, `demolition.scope`에는 `above`, `below`, `full`, `partial` 중 실제 범위를 기록합니다. `demolition.work_schedule`은 `crush`와 `selective` 객체에 `totalDays`, `structureDays`, `setupDays`, `interiorDays`, `finishDays`, `excavatorHours`, `equipmentQuote`, `extraWorksCost`를 담을 수 있습니다. 모델 탭의 ‘공정표 입력값 반영’으로 기입한 항목을 적용합니다.
+임의의 IFC에도 `reclaim-plan/1` JSON을 연결할 수 있습니다. `building.demolition_area_m2`에는 해당 범위 면적을, `demolition.scope`에는 `above`, `below`, `full`, `partial` 중 실제 범위를 기록합니다. 경계 슬래브·지붕의 귀속은 `demolition.basement_cap_owner`에 `above` 또는 `below`로 지정합니다. 지상 높이는 현장 입력, 계획서의 `building.height_m`, IFC에서 추정한 지상 높이 순으로 적용합니다.
+
+`demolition.work_schedule`은 `crush`와 `selective` 객체에 `totalDays`, `structureDays`, `setupDays`, `interiorDays`, `finishDays`, `excavatorHours`, `equipmentQuote`, `extraWorksCost`를 담을 수 있습니다. 모델 탭의 ‘공정표 입력값 반영’으로 기입한 항목을 적용합니다. 철골 작업이 있는 경우 전체 작업일의 근거와 절단·인양 공기의 확인 상태를 공법별로 표시합니다.
 
 ### 콘크리트 특수절단·인양
 
